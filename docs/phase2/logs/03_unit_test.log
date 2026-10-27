@@ -1,0 +1,12 @@
+---------------------------------------------
+cases_total      : 1518
+cases_pass       : 1518
+cases_fail       : 0
+latency_write    : 3 cycle
+latency_illegal  : 3 cycle
+stream_issued    : 1024
+stream_completed : 1024
+stream_ok        : true
+throughput       : 1 inst/cycle
+total_cycles     : 10148
+RESULT           : PASS

@@ -1,0 +1,9 @@
+[build] VERILATOR = /mnt/hdata/qxriscv/cieriscv/.tools/verilator/bin/verilator
+Verilator 5.034 2025-02-24 rev v5.034
+make: 进入目录“/mnt/hdata/qxriscv/cieriscv/build/obj_dir”
+make: 对“default”无需做任何事。
+make: 离开目录“/mnt/hdata/qxriscv/cieriscv/build/obj_dir”
+- V e r i l a t i o n   R e p o r t: Verilator 5.034 2025-02-24 rev v5.034
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.016 s (elab=0.000, cvt=0.000, bld=0.014); cpu 0.002 s on 48 threads; alloced 7.664 MB
+[build] OK: /mnt/hdata/qxriscv/cieriscv/build/obj_dir/tb_vdot

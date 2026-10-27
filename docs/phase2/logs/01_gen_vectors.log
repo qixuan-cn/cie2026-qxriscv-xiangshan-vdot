@@ -1,0 +1,2 @@
+vectors written: tests/vectors/vdot_vectors.txt
+  total=1518 write=1513 illegal=4 vl_zero=1
