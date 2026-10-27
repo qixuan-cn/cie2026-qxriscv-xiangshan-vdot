@@ -92,10 +92,11 @@ struct CaseResult {
     bool pass;
     int lat;
     std::string detail;
+    Wid got;            // 实际观测到的 vd（仅写回用例有效）
 };
 
 static CaseResult run_case(const Case &c) {
-    CaseResult r{true, 0, ""};
+    CaseResult r{true, 0, "", Wid{}};
 
     top->in_valid   = 1;
     top->in_vl_zero = c.vl_zero;
@@ -136,6 +137,7 @@ static CaseResult run_case(const Case &c) {
         else {
             Wid exp = hex_to_wid(c.expected);
             Wid got = vd_read();
+            r.got = got;
             if (!wid_eq(exp, got)) {
                 r.pass = false;
                 r.detail = "vd 不匹配: exp=" + wid_str(exp) + " got=" + wid_str(got);
@@ -213,13 +215,13 @@ static bool run_stream(int n, int *out_count, uint64_t *first_cyc, uint64_t *las
 int main(int argc, char **argv) {
     Verilated::commandArgs(argc, argv);
     if (argc < 2) {
-        std::cerr << "usage: tb_vdot <vectors.txt>\n";
+        std::cerr << "usage: tb_vdot <vectors.txt> [out.vcd] [result_export.txt]\n";
         return 2;
     }
     top = new VVDot;
 
-    // 可选波形：tb_vdot <vectors.txt> <out.vcd>
-    if (argc >= 3) {
+    // 可选波形：tb_vdot <vectors.txt> <out.vcd>，传 "-" 表示不导出波形
+    if (argc >= 3 && std::string(argv[2]) != "-") {
         Verilated::traceEverOn(true);
         tfp = new VerilatedVcdC;
         top->trace(tfp, 99);
@@ -238,6 +240,18 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 3; i++) tick();
     top->reset = 0;
     top->eval();
+
+    // 可选：导出逐用例 128 bit 结果，供 NEMU 协同仿真直接 diff
+    // 只导出"合法且写回"的用例，顺序与输入文件一致
+    std::ofstream export_f;
+    if (argc >= 4) {
+        export_f.open(argv[3]);
+        if (!export_f) {
+            std::cerr << "cannot open export file " << argv[3] << "\n";
+            return 2;
+        }
+        export_f << "# one 128-bit result per write-back case (vl_zero=0, ill=0)\n";
+    }
 
     std::ifstream f(argv[1]);
     if (!f) {
@@ -272,6 +286,9 @@ int main(int argc, char **argv) {
             fail++;
             std::cout << "FAIL " << c.id << " : " << r.detail << "\n";
         }
+        if (export_f.is_open() && !c.ill && !c.vl_zero) {
+            export_f << wid_str(r.got) << "\n";
+        }
         // 排空流水线，避免用例间干扰
         top->in_valid = 0;
         top->eval();
@@ -298,6 +315,8 @@ int main(int argc, char **argv) {
     std::cout << "throughput       : " << tp << " inst/cycle\n";
     std::cout << "total_cycles     : " << cyc << "\n";
     std::cout << "RESULT           : " << ((fail == 0 && stream_ok) ? "PASS" : "FAIL") << "\n";
+
+    if (export_f.is_open()) export_f.close();
 
     if (tfp) {
         tfp->close();

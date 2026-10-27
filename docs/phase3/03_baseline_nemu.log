@@ -1,0 +1,13 @@
+NEMU baseline (RVV composition) equivalence
+nemu_binary      : .tools/nemu/build/riscv64-nemu-interpreter
+image            : build/nemu/vdot_baseline.bin (48768 bytes)
+baseline_seq     : vsext.vf2 x4 + vmul.vv + vredsum.vs (e8->e16->e32)
+  vector_alu_ops : 6 / case
+  vdot_alu_ops   : 1 / case
+  alu_op_ratio   : 6.0x
+cases_expected   : 1513
+cases_observed   : 1513
+cases_fail       : 0
+cases_extra      : 0
+nemu_exit_code   : 0
+RESULT           : PASS

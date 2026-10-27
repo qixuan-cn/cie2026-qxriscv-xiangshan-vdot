@@ -1,0 +1,77 @@
+diff --git a/src/isa/riscv64/include/isa-all-instr.h b/src/isa/riscv64/include/isa-all-instr.h
+index 2f18ca1..58a8fdf 100644
+--- a/src/isa/riscv64/include/isa-all-instr.h
++++ b/src/isa/riscv64/include/isa-all-instr.h
+@@ -167,6 +167,7 @@
+   f(vssra) f(vnsrl) f(vnsra) f(vnclipu) \
+   f(vnclip) f(vssrl) f(vwredsumu) f(vwredsum) \
+   f(vredsum) \
++  f(vdot) \
+   f(vredand) f(vredor) f(vredxor) f(vredminu) \
+   f(vredmin) f(vredmaxu) f(vredmax) f(vmvsx) \
+   f(vmvxs) f(vpopc) f(vfirst) f(vmsbf) f(vmsof) \
+diff --git a/src/isa/riscv64/instr/rvv/decode.h b/src/isa/riscv64/instr/rvv/decode.h
+index ee7618e..75b1804 100644
+--- a/src/isa/riscv64/instr/rvv/decode.h
++++ b/src/isa/riscv64/instr/rvv/decode.h
+@@ -211,6 +211,10 @@ def_THelper(vopivv) {
+   def_INSTR_TAB("010100 ? ????? ????? ??? ????? ????? ??", vror);
+   def_INSTR_TAB("110101 ? ????? ????? ??? ????? ????? ??", vwsll);
+ 
++  // 2026CIE 自定义指令：vdot.vv（SEW=8, VLEN=128, K=8）
++  // funct6=111111 属于 RVV 保留编码空间，本项目专用；语义见 docs/phase2/design.md
++  def_INSTR_TAB("111111 ? ????? ????? ??? ????? ????? ??", vdot);
++
+   return EXEC_ID_inv;
+ }
+ 
+diff --git a/src/isa/riscv64/instr/rvv/vcompute.h b/src/isa/riscv64/instr/rvv/vcompute.h
+index 2bcb6aa..3cfa94c 100644
+--- a/src/isa/riscv64/instr/rvv/vcompute.h
++++ b/src/isa/riscv64/instr/rvv/vcompute.h
+@@ -23,6 +23,45 @@ def_EHelper(vadd) {
+   ARITH(ADD, SIGNED)
+ }
+ 
++//=============================================================================
++// 2026CIE 自定义指令 vdot.vv
++//   S = sum_{i=0..7} sext8(vs1[8i+7:8i]) * sext8(vs2[8i+7:8i])
++//   vd[31:0] = S (32 bit 二补码)，vd[127:32] = 0
++// 仅支持 SEW=8 / LMUL=1 / vm=1；其余组合报非法指令。
++//=============================================================================
++def_EHelper(vdot) {
++  require_vector(true);
++  if (vtype->vsew != 0 || vtype->vlmul != 0 || s->vm == 0) {
++    longjmp_exception(EX_II);
++  }
++  check_vstart_exception(s);
++  if (check_vstart_ignore(s)) {
++    vp_set_dirty();
++    return;
++  }
++  if (vl->val == 0) {
++    // vl == 0：不写回，正常退休
++    vstart->val = 0;
++    return;
++  }
++
++  int32_t sum = 0;
++  for (int i = 0; i < 8; i++) {
++    rtlreg_t a, b;
++    get_vreg(id_src->reg,  i, &a, 0, 0, SIGNED, 0);
++    get_vreg(id_src2->reg, i, &b, 0, 0, SIGNED, 0);
++    sum += (int32_t)(int8_t)a * (int32_t)(int8_t)b;
++  }
++
++  // 写满整寄存器：vd[31:0] = sum（按位，不做符号扩展），vd[127:32] = 0
++  vreg_l(id_dest->reg, 0) = (uint64_t)(uint32_t)sum;
++  for (int i = 1; i < VLEN / 64; i++) {
++    vreg_l(id_dest->reg, i) = 0;
++  }
++  vp_set_dirty();
++  vstart->val = 0;
++}
++
+ def_EHelper(vsub) {
+   ARITH(SUB, SIGNED)
+ }

@@ -12,9 +12,9 @@
 |---|---|---|
 | 阶段一 | 环境部署、`hello` 输出、vadd 波形分析 | **阻塞**：本机无 `xs-env` / RISC-V 工具链 |
 | 阶段二 | vdot.vv 设计文档、RTL、正/负/边界测试 | **设计 + RTL + 单元级验证完成**（1518/1518 PASS）；香山内集成待环境 |
-| 阶段三 | NEMU 扩展、difftest、基线对比与加速比 | 基线等价性已证（1513/1513）；性能为**解析估算**，实测待环境 |
+| 阶段三 | NEMU 扩展、协同仿真、基线对比与加速分析 | **NEMU 扩展 + 协同仿真完成**（1513/1513，RTL↔NEMU 0 mismatch）；单元级实测 3 cycle / 1.0 inst/cycle；平台实测待环境 |
 
-### 已完成并验证（模块级 RTL 仿真，Verilator 5.034）
+### 已完成并验证（模块级 RTL 仿真 + NEMU 协同仿真）
 
 | 项 | 结果 | 证据 |
 |---|---|---|
@@ -23,9 +23,13 @@
 | 延迟 / 吞吐 | 3 cycle / 1.0 inst/cycle | 同上 |
 | 三方模型一致性 | Python / C / C++ 内联，1518 条一致 | `docs/phase2/logs/06_c_model_crosscheck.log` |
 | 基线（RVV 组合）功能等价 | 1513 / 1513 | `docs/phase3/00_baseline_equiv.log` |
+| NEMU 内 `vdot.vv` 语义 | **1513 / 1513**，0 fail | [01_nemu_cosim.log](docs/phase3/01_nemu_cosim.log) |
+| RTL ↔ NEMU 协同仿真 | **1513 vs 1513，mismatch 0** | [02_rtl_export.txt](docs/phase3/02_rtl_export.txt) |
+| 基线在 NEMU 上跑通 | **1513 / 1513**，6→1 数据通路指令 | [03_baseline_nemu.log](docs/phase3/03_baseline_nemu.log) |
+| 单元级时序实测 | 3 cycle / 1.0 inst·cycle⁻¹（1024 条背靠背，10113 cycles） | [04_rtl_unit_perf.log](docs/phase3/04_rtl_unit_perf.log) |
 | 波形 | `docs/phase2/waveform/vdot_unit.vcd` | — |
 
-> **表述约束**：以上均为**功能单元模块级**仿真结果。香山昆明湖 V2 内集成、NEMU difftest 与真实加速比**尚未执行**，不得表述为"已在香山平台验证"。
+> **表述约束**：以上均为**功能单元模块级**仿真与 **NEMU 指令集模拟器**结果。香山昆明湖 V2 内集成与真实加速比**尚未执行**，不得表述为"已在香山平台验证"或给出实测加速比。
 
 ## 仓库结构
 
@@ -35,16 +39,22 @@
 ├── doc/                 # 赛题官方材料（提交要求、赛题资料、提交流程指南）
 ├── ipd/                 # IPD 流程文档集（方案、规格、测试方案、计划、对照表）
 ├── docs/                # 阶段交付文档与证据
+│   ├── PROGRESS.md      # 任务进度跟踪表（Living Document，持续更新）
 │   ├── phase2/          # 设计文档、测试报告、日志、波形
-│   └── phase3/          # 性能分析（含估算口径声明）与基线等价性日志
+│   └── phase3/          # 协同仿真报告、基线日志、单元级性能日志（含估算口径声明）
 ├── rtl/
 │   ├── verilog/VDot.v   # 已验证的模块级 RTL（SystemVerilog 语法）
 │   └── chisel/VDot.scala# 香山集成用的 Chisel 骨架（未编译校验）
-├── patches/             # 香山集成说明（规程，未执行）
+├── patches/
+│   ├── nemu-vdot.patch  # NEMU 扩展补丁（3 文件，+44 行）
+│   └── xiangshan-vdot-integration.md  # 香山集成说明（规程，未执行）
 ├── tests/
 │   ├── ref_vdot.py      # Python golden model
 │   ├── ref_baseline.py  # 基线指令序列的语义等价模型
 │   ├── model/vdot_ref.c # C 参考模型（NEMU-ready）
+│   ├── as/mini_asm.py   # 手写 RISC-V/RVV 汇编器（无工具链环境下的镜像生成）
+│   ├── run_nemu_cosim.py    # NEMU 自测 + 协同仿真 + RTL 结果导出
+│   ├── run_nemu_baseline.py # RVV 组合基线在 NEMU 上跑通并计数
 │   ├── gen_vectors.py   # 向量生成（定向 + 随机 + 边界密集）
 │   ├── tb/tb_vdot.cpp   # Verilator C++ 测试台
 │   └── vectors/         # 1518 条测试向量
@@ -63,7 +73,10 @@
 | [阶段二设计文档](docs/phase2/design.md) | 提交版：指令语义、微架构、数据通路、RTL 结构、追溯 |
 | [阶段二测试报告](docs/phase2/test_report.md) | 1518 条用例结果、时序实测、断言、缺陷记录、未验证项 |
 | [香山集成说明](patches/xiangshan-vdot-integration.md) | 集成规程与核对表（**未执行**） |
-| [阶段三性能分析](docs/phase3/perf_analysis.md) | 基线定义与等价性、延迟/吞吐估算、实测协议（**估算，非实测**） |
+| [NEMU 扩展补丁](patches/nemu-vdot.patch) | 阶段三提交版：`vdot.vv` 译码 + 执行语义（3 文件，+44 行） |
+| [阶段三协同仿真报告](docs/phase3/cosim_report.md) | NEMU 扩展改动、1513 条协同仿真、基线对比、单元级实测与缺陷记录 |
+| [阶段三性能分析](docs/phase3/perf_analysis.md) | 基线定义与等价性、延迟/吞吐估算、平台实测协议（**估算部分非实测**） |
+| [任务进度跟踪表](docs/PROGRESS.md) | 里程碑、官方交付对照、详细任务、阻塞项与变更记录（持续更新） |
 
 ## 关键设计结论（摘要）
 
@@ -91,13 +104,35 @@ throughput       : 1 inst/cycle
 RESULT           : PASS
 ```
 
+### 阶段三：NEMU 协同仿真
+
+```bash
+# 1) 应用扩展补丁并构建 NEMU（首次或补丁变更后）
+git -C .tools/nemu apply ../../patches/nemu-vdot.patch   # 已在源码树中时跳过
+make -C .tools/nemu -j"$(nproc)" NEMU_HOME="$(cd .tools/nemu && pwd)" LIBRARY_PATH=/tmp/sdllib
+
+# 2) NEMU 自测 + 导出 1513 条写回结果（喂给 tb_vdot）
+python3 tests/run_nemu_cosim.py --rtl-export docs/phase3/02_rtl_export.txt
+
+# 3) RTL 侧跑同一顺序的用例并导出结果
+bash scripts/build_sim.sh
+./build/obj_dir/tb_vdot build/nemu/cosim_vectors.txt - docs/phase3/02_rtl_export.txt
+
+# 4) RVV 组合基线在 NEMU 上跑通并计数
+python3 tests/run_nemu_baseline.py
+```
+
+预期输出：`cases_fail 0`、`rtl_vs_nemu : lines=1513/nemu=1513 mismatch=0`、`alu_op_ratio : 6.0x`，均以 `RESULT : PASS` 结尾。
+
+> `tests/as/mini_asm.py` 是本项目自带的最小 RISC-V/RVV 汇编器，用于在无 RISC-V 工具链的环境中生成平面镜像。
+
 ## 版本锁定
 
 | 组件 | 版本 / commit |
 |---|---|
 | xs-env | 待记录（阶段一，环境就绪后补） |
 | XiangShan | 待记录（阶段一） |
-| NEMU | 待记录（阶段三） |
+| NEMU | `a683e0b`（XiangShan 版源码）+ `patches/nemu-vdot.patch` |
 | Verilator | 5.034（本机源码构建，`--assert --trace`） |
 | g++ | Debian 14.2.0 |
 | Python | 3.13.5 |

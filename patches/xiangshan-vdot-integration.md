@@ -83,7 +83,7 @@ class VDot(implicit p: Parameters) extends VFu()(implicitly) {
 
 ## 3. Step B：译码与 uop 类型（I1/I2）
 
-1. 在译码表中新增一条 `vdot.vv`：`opcode=0x57`、`funct3=000`、`funct6=100000`、`vm=1`。
+1. 在译码表中新增一条 `vdot.vv`：`opcode=0x57`、`funct3=000`、`funct6=111111`、`vm=1`。
 2. 新增 `VFuType.VDot`（或按既有枚举风格命名），并把它加入"向量指令"集合，使其走向量发射路径。
 3. **冲突检查（必做）**：新增 funct6 前，先确认该编码在所用香山版本中未被占用：
 
