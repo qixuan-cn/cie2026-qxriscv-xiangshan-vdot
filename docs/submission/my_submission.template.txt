@@ -1,0 +1,10 @@
+team-name: qxriscv
+repo-url: https://github.com/qixuan-cn/cie2026-qxriscv-xiangshan-vdot.git
+github-username: qixuan-cn
+contact-email: <填写联系人邮箱>
+project-description: 为香山昆明湖 V2 设计并验证 RISC-V 自定义向量点积指令 vdot.vv：单 uop 完成 8 个 int8 乘累加，复用既有向量框架，1518 条用例与 NEMU 协同仿真全部通过。
+team-members: <成员1(角色), 成员2(角色)>
+university: <学校/单位>
+advisor: <指导老师>
+phone: <联系电话>
+notes: 阶段一（香山环境构建/hello/vadd 波形）因本环境缺 xs-env 与 RISC-V 工具链尚未闭环；阶段二、三、四交付完整，证据见仓库 docs/ 与 scripts/run_all.sh。
