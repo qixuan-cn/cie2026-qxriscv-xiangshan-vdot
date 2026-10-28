@@ -23,6 +23,7 @@ out/
 !docs/phase2/logs/*.log
 !docs/phase2/waveform/*.vcd
 !docs/phase3/*.log
+!docs/phase4/*.log
 
 # Python
 __pycache__/

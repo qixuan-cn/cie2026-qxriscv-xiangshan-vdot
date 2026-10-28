@@ -13,6 +13,7 @@
 | 阶段一 | 环境部署、`hello` 输出、vadd 波形分析 | **阻塞**：本机无 `xs-env` / RISC-V 工具链 |
 | 阶段二 | vdot.vv 设计文档、RTL、正/负/边界测试 | **设计 + RTL + 单元级验证完成**（1518/1518 PASS）；香山内集成待环境 |
 | 阶段三 | NEMU 扩展、协同仿真、基线对比与加速分析 | **NEMU 扩展 + 协同仿真完成**（1513/1513，RTL↔NEMU 0 mismatch）；单元级实测 3 cycle / 1.0 inst/cycle；平台实测待环境 |
+| 阶段四 | RTL 收口、综合评估、加速模型与提交 | **收口完成**：严格 lint 0 告警；generic 综合 4186 单元 / 172 FF / 最长路径 25 级（≈5.3k–8.4k GE）；加速模型 4.0× 延迟、6.0× 吞吐；PDK 签核与提交待环境 |
 
 ### 已完成并验证（模块级 RTL 仿真 + NEMU 协同仿真）
 
@@ -26,7 +27,9 @@
 | NEMU 内 `vdot.vv` 语义 | **1513 / 1513**，0 fail | [01_nemu_cosim.log](docs/phase3/01_nemu_cosim.log) |
 | RTL ↔ NEMU 协同仿真 | **1513 vs 1513，mismatch 0** | [02_rtl_export.txt](docs/phase3/02_rtl_export.txt) |
 | 基线在 NEMU 上跑通 | **1513 / 1513**，6→1 数据通路指令 | [03_baseline_nemu.log](docs/phase3/03_baseline_nemu.log) |
-| 单元级时序实测 | 3 cycle / 1.0 inst·cycle⁻¹（1024 条背靠背，10113 cycles） | [04_rtl_unit_perf.log](docs/phase3/04_rtl_unit_perf.log) |
+| 单元级时序实测 | 3 cycle / 1.0 inst·cycle⁻¹（1024 条背靠背；全量 1518 条回归总 10148 cycles） | [03_rtl_full_perf.log](docs/phase4/03_rtl_full_perf.log) |
+| 严格 lint | **0 告警 0 错误**（`-Wall`，仅 1 处语义性豁免） | [02_verilator_lint.log](docs/phase4/02_verilator_lint.log) |
+| generic 综合 | 4186 单元 / 172 FF；最长 R2R 路径 **25 级**（EX2 加法树）；**≈5.3k–8.4k GE** | [01_yosys_synth.log](docs/phase4/01_yosys_synth.log) |
 | 波形 | `docs/phase2/waveform/vdot_unit.vcd` | — |
 
 > **表述约束**：以上均为**功能单元模块级**仿真与 **NEMU 指令集模拟器**结果。香山昆明湖 V2 内集成与真实加速比**尚未执行**，不得表述为"已在香山平台验证"或给出实测加速比。
@@ -41,7 +44,8 @@
 ├── docs/                # 阶段交付文档与证据
 │   ├── PROGRESS.md      # 任务进度跟踪表（Living Document，持续更新）
 │   ├── phase2/          # 设计文档、测试报告、日志、波形
-│   └── phase3/          # 协同仿真报告、基线日志、单元级性能日志（含估算口径声明）
+│   ├── phase3/          # 协同仿真报告、基线日志、单元级性能日志（含估算口径声明）
+│   └── phase4/          # RTL 收口、lint、generic 综合、加速模型报告与日志
 ├── rtl/
 │   ├── verilog/VDot.v   # 已验证的模块级 RTL（SystemVerilog 语法）
 │   └── chisel/VDot.scala# 香山集成用的 Chisel 骨架（未编译校验）
@@ -75,6 +79,7 @@
 | [香山集成说明](patches/xiangshan-vdot-integration.md) | 集成规程与核对表（**未执行**） |
 | [NEMU 扩展补丁](patches/nemu-vdot.patch) | 阶段三提交版：`vdot.vv` 译码 + 执行语义（3 文件，+44 行） |
 | [阶段三协同仿真报告](docs/phase3/cosim_report.md) | NEMU 扩展改动、1513 条协同仿真、基线对比、单元级实测与缺陷记录 |
+| [阶段四收口与综合报告](docs/phase4/release_report.md) | RTL 死逻辑清理、严格 lint、generic 综合与 GE 估算、加速模型与剩余阻塞 |
 | [阶段三性能分析](docs/phase3/perf_analysis.md) | 基线定义与等价性、延迟/吞吐估算、平台实测协议（**估算部分非实测**） |
 | [任务进度跟踪表](docs/PROGRESS.md) | 里程碑、官方交付对照、详细任务、阻塞项与变更记录（持续更新） |
 
@@ -89,6 +94,12 @@
 ```bash
 # 一键回归：Python 模型自检 -> 生成向量 -> C 模型交叉比对 -> 构建 -> RTL 仿真 -> 归档日志与波形
 bash scripts/run_unit_tests.sh
+```
+
+全链路（含 lint、NEMU 协同仿真与基线）：
+
+```bash
+bash scripts/run_all.sh    # 任一步失败即返回非 0；末行打印 ALL : PASS / FAIL
 ```
 
 依赖：`python3`、`gcc`、Verilator（脚本依次探测 `verilator-inst/`、`.tools/verilator/`、系统 PATH）。
@@ -126,6 +137,18 @@ python3 tests/run_nemu_baseline.py
 
 > `tests/as/mini_asm.py` 是本项目自带的最小 RISC-V/RVV 汇编器，用于在无 RISC-V 工具链的环境中生成平面镜像。
 
+### 阶段四：RTL 质量门禁与综合评估
+
+```bash
+# 严格 lint（0 告警 0 错误为通过）
+.tools/verilator/bin/verilator --lint-only -Wall -Wno-DECLFILENAME rtl/verilog/VDot.v --top-module VDot
+
+# generic 综合评估（需 yosys；无 PDK 库，输出为工艺无关规模与逻辑深度）
+yosys -p "read_verilog -sv rtl/verilog/VDot.v; synth -top VDot -noabc; techmap; opt; ltp -noff; stat"
+```
+
+预期：lint 无输出告警；综合 `Number of cells: 4186`、`Longest topological path ... (length=25)`。
+
 ## 版本锁定
 
 | 组件 | 版本 / commit |
@@ -133,6 +156,7 @@ python3 tests/run_nemu_baseline.py
 | xs-env | 待记录（阶段一，环境就绪后补） |
 | XiangShan | 待记录（阶段一） |
 | NEMU | `a683e0b`（XiangShan 版源码）+ `patches/nemu-vdot.patch` |
+| Yosys | 0.52（Debian 包本地解包，仅用于 generic 综合评估，未安装进系统） |
 | Verilator | 5.034（本机源码构建，`--assert --trace`） |
 | g++ | Debian 14.2.0 |
 | Python | 3.13.5 |

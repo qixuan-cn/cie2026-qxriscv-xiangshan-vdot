@@ -25,7 +25,7 @@
 | M2 | vdot 单元 RTL + 单元验证 | TR3 | D10 | **完成** | 100% |
 | M3 | 香山内集成 + 汇编级正/负/边界测试 | TR4 | D12 | **阻塞** | 30%（集成规程就绪） |
 | M4 | NEMU 扩展 + 协同仿真 | TR4 | D15 | **完成** | 100%（1513/1513，RTL↔NEMU 0 mismatch） |
-| M5 | 基线与加速比 + 提交 | TR6/ADCP | D20 | 进行中 | 70%（基线已跑通并计数；平台实测待环境） |
+| M5 | 基线与加速比 + 提交 | TR6/ADCP | D20 | 进行中 | 85%（基线与协同仿真全绿；generic 综合、逻辑深度与加速模型已完成；平台实测与提交待环境） |
 
 ## 2. 官方交付要求对照
 
@@ -42,7 +42,7 @@
 | 3.1.1 NEMU 扩展 | 源码改动 | **完成** | [nemu-vdot.patch](file:///mnt/hdata/qxriscv/cieriscv/patches/nemu-vdot.patch) |
 | 3.1.2 协同仿真 | NEMU vs RTL 比对 | **完成** | [01_nemu_cosim.log](file:///mnt/hdata/qxriscv/cieriscv/docs/phase3/01_nemu_cosim.log)：1513/1513，0 mismatch |
 | 3.2 基线实现 | 组合指令程序 | **完成**（NEMU 上跑通） | [run_nemu_baseline.py](file:///mnt/hdata/qxriscv/cieriscv/tests/run_nemu_baseline.py)：1513/1513 |
-| 3.3 加速分析 | 分析报告 | 进行中（单元级实测，平台实测待环境） | [cosim_report.md](file:///mnt/hdata/qxriscv/cieriscv/docs/phase3/cosim_report.md) |
+| 3.3 加速分析 | 分析报告 | 完成（模型口径）：数据通路 6→1、模型延迟 12→3 cycle（4.0×）、吞吐 6.0×；平台实测待环境 | [release_report.md](file:///mnt/hdata/qxriscv/cieriscv/docs/phase4/release_report.md) §5 |
 
 ## 3. 详细任务表（当前迭代）
 
@@ -62,6 +62,13 @@
 | T3.7 | 阶段三报告（实测替换估算） | `docs/phase3/*` | 完成 | T3.4/T3.6 | [cosim_report.md](file:///mnt/hdata/qxriscv/cieriscv/docs/phase3/cosim_report.md) |
 | T3.8 | 香山内集成（VFU） | 香山源码改动 | 阻塞 | xs-env + 工具链 | 集成规程已就绪 |
 | T3.9 | 阶段一（环境/hello/vadd 波形） | 日志 + 波形 + 文档 | 阻塞 | xs-env | — |
+| T4.1 | RTL 死逻辑清理与严格 lint 门禁 | `VDot.v` 修订 | 完成 | T2.2 | `02_verilator_lint.log`：4 告警 → **0** |
+| T4.2 | generic 综合与逻辑深度评估 | 综合日志 | 完成 | T4.1 | `01_yosys_synth.log`：4186 单元 / 172 FF / 最长路径 25 级 |
+| T4.3 | 面积估算（GE 口径） | 估算表 | 完成 | T4.2 | `release_report.md` §3.2：≈5.3k–8.4k GE |
+| T4.4 | 加速模型（延迟/吞吐）与答辩口径 | 模型表 | 完成 | T4.1 | `release_report.md` §5：4.0× 延迟 / 6.0× 吞吐（模型） |
+| T4.5 | 清理后全量回归（单元/协同/基线） | 回归日志 | 完成 | T4.1 | 1518/1518；1513/1513，0 mismatch；基线 6.0× |
+| T4.6 | 一键回归脚本（单元+lint+协同+基线） | `scripts/run_all.sh` | 完成 | T4.5 | 本机 `ALL : PASS`（6 步全绿） |
+| T4.7 | 文档一致性同步（行号/信号/面积口径） | `design.md` v1.1、`perf_analysis.md` §5、`ipd/01` Q5 | 完成 | T4.1–T4.4 | 清除 `s1_valid/s2_valid`、`sum_c` 旧引用；面积改为 generic 综合口径 |
 
 ## 4. 阻塞与风险
 
@@ -70,7 +77,7 @@
 | B1 | 阶段一全部内容 | `xs-env`、RISC-V 工具链、≥32 GB 内存 | 提供环境或允许安装 | 跑 hello、采 vadd 波形 |
 | B2 | 香山内集成与回归 | 香山源码仓库 | B1 解锁 | 按 `patches/xiangshan-vdot-integration.md` 执行 I1–I7 |
 | B3 | 真实加速比 | 香山/NEMU 计时环境 | B1 或 NEMU 可运行 | 按 `perf_analysis.md` §6 协议实测 |
-| B4 | 综合面积/时序 | yosys 或 DC | 允许安装 | 补 U-05 |
+| B4 | PDK 面积/时序签核 | 工艺库 + DC/Genus | 环境允许 | **部分关闭**：generic 规模/深度已取得（`docs/phase4/01_yosys_synth.log`）；µm² 与 ns 仍待做 |
 
 > **表述约束（长期有效）**：在 B1/B2/B3 关闭前，任何材料不得宣称"已在香山平台验证"或给出"实测加速比"。
 
@@ -78,6 +85,8 @@
 
 | 日期 | 变更 |
 |---|---|
+| 2026-10-28 | 阶段四文档一致性收口（T4.7）：`docs/phase2/design.md` v1.1 对齐清理后的 RTL 行号/信号与综合结果；`docs/phase3/perf_analysis.md` §5 面积改为 generic 综合口径；`docs/phase2/test_report.md` U-05 与 `ipd/01` Q5 标注"部分关闭"；`scripts/run_all.sh` 6 步一键回归本机全绿 |
+| 2026-10-28 | 阶段四完成（T4.1–T4.5）：RTL 死逻辑清理（`sum_c` 加法树、`s1_valid`/`s2_valid`）+ 严格 lint 告警 4→0；yosys generic 综合 4186 单元 / 172 FF / 最长 R2R 路径 25 级，估算 ≈5.3k–8.4k GE；补加速模型（延迟 12→3 cycle，4.0×；吞吐 6.0×）；清理后全量回归 1518/1518、1513/1513 0 mismatch、基线 6.0× 全绿；B4 部分关闭，报告 `docs/phase4/release_report.md` |
 | 2026-10-27 | 阶段三文档一致性收口：README 阶段三状态/证据链/仓库结构/复现命令/版本锁定（NEMU `a683e0b`）同步；`vdot` 编码由 `funct6=100000`（建议值）定值为 `111111`，回写至 `ipd/01` §2.2、`docs/phase2/design.md` §2.1、`patches/xiangshan-vdot-integration.md` I1，O2 关闭 |
 | 2026-10-27 | 阶段三 T3.1–T3.7 全部完成：NEMU `vdot` 实现 + 协同仿真 1513/1513（RTL↔NEMU 0 mismatch）+ RVV 组合基线跑通（6→1 数据通路指令）+ 单元级实测 3 cycle/1.0 inst/cycle；M4 关闭，报告 `docs/phase3/cosim_report.md` |
 | 2026-10-27 | 建立本表；阶段二（M2）标记完成，证据为 1518/1518 PASS + 3 cycle/1 inst/cycle；启动阶段三（M4/M5） |

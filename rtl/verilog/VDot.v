@@ -24,8 +24,12 @@ module VDot #(
 
     // 请求侧（由向量发射框架驱动）
     input  logic              in_valid,
+    // 语义只取两个源寄存器的低 64 bit（8 个 int8）；VLEN=128 接口的高 64 bit
+    // 按 RVV 整寄存器语义保留但本单元不解引用，属预期行为，故局部豁免该告警。
+    /* verilator lint_off UNUSEDSIGNAL */
     input  logic [VLEN-1:0]   in_vs1,
     input  logic [VLEN-1:0]   in_vs2,
+    /* verilator lint_on UNUSEDSIGNAL */
     input  logic              in_vl_zero,   // vl == 0：不写回
     input  logic              in_vm,        // vm == 1 才合法
     input  logic [1:0]        in_sew,       // 0: e8（唯一合法）
@@ -68,42 +72,20 @@ module VDot #(
   endgenerate
 
   //--------------------------------------------------------------------------
-  // EX2 加法树：8 -> 4 -> 2 -> 1（常数索引，便于综合与时序分析）
-  //--------------------------------------------------------------------------
-  logic signed [ACC_W-1:0] t0 [0:K-1];
-
-  generate
-    for (gi = 0; gi < K; gi++) begin : g_tree_init
-      assign t0[gi] = {{(ACC_W-16){prod[gi][15]}}, prod[gi]};
-    end
-  endgenerate
-
-  logic signed [ACC_W-1:0] t1_0, t1_1, t1_2, t1_3;
-  logic signed [ACC_W-1:0] t2_0, t2_1;
-  logic signed [ACC_W-1:0] sum_c;
-
-  assign t1_0   = t0[0] + t0[1];
-  assign t1_1   = t0[2] + t0[3];
-  assign t1_2   = t0[4] + t0[5];
-  assign t1_3   = t0[6] + t0[7];
-  assign t2_0   = t1_0 + t1_1;
-  assign t2_1   = t1_2 + t1_3;
-  assign sum_c  = t2_0 + t2_1;
-
-  //--------------------------------------------------------------------------
   // 流水寄存器：EX1 -> EX2（保存乘积与控制）
+  //
+  // valid 不单独寄存：写回由 s1_write 编码，"有效但不写回"仅出现在 vl==0，
+  // 因此 (write, illegal) 已足以表达全部状态，省去无读者的 valid 触发器。
   //--------------------------------------------------------------------------
-  logic              s1_valid, s1_illegal, s1_write;
+  logic              s1_illegal, s1_write;
   logic signed [15:0] s1_prod [K];
 
   always_ff @(posedge clk) begin
     if (reset) begin
-      s1_valid   <= 1'b0;
       s1_illegal <= 1'b0;
       s1_write   <= 1'b0;
       for (int j = 0; j < K; j++) s1_prod[j] <= '0;
     end else begin
-      s1_valid   <= in_valid;
       s1_illegal <= in_valid && !legal;
       s1_write   <= in_valid && legal && !in_vl_zero;
       for (int j = 0; j < K; j++) s1_prod[j] <= prod[j];
@@ -111,7 +93,7 @@ module VDot #(
   end
 
   //--------------------------------------------------------------------------
-  // EX2：基于已寄存乘积的加法树（与上一级同构）
+  // EX2：基于已寄存乘积的加法树（8 -> 4 -> 2 -> 1，常数索引便于时序分析）
   //--------------------------------------------------------------------------
   logic signed [ACC_W-1:0] u0 [0:K-1];
 
@@ -133,17 +115,15 @@ module VDot #(
   assign u2_1  = u1_2 + u1_3;
   assign sum2  = u2_0 + u2_1;
 
-  logic              s2_valid, s2_illegal, s2_write;
+  logic              s2_illegal, s2_write;
   logic signed [ACC_W-1:0] s2_sum;
 
   always_ff @(posedge clk) begin
     if (reset) begin
-      s2_valid   <= 1'b0;
       s2_illegal <= 1'b0;
       s2_write   <= 1'b0;
       s2_sum     <= '0;
     end else begin
-      s2_valid   <= s1_valid;
       s2_illegal <= s1_illegal;
       s2_write   <= s1_write;
       s2_sum     <= sum2;

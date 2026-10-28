@@ -1,0 +1,11 @@
+NEMU co-simulation (vdot.vv vs golden model)
+nemu_binary      : .tools/nemu/build/riscv64-nemu-interpreter
+image            : build/nemu/vdot_cosim.bin (48720 bytes)
+uart_mmio        : 0x310b0000
+cases_expected   : 1513
+cases_observed   : 1513
+cases_fail       : 0
+cases_extra      : 0
+nemu_exit_code   : 0
+rtl_vs_nemu      : lines=1513/nemu=1513 mismatch=0
+RESULT           : PASS
