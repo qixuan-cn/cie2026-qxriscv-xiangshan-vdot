@@ -1,6 +1,6 @@
 # 操作步骤截图与录屏（阶段一~四）
 
-> 项目：2026CIE · qxriscv · xiangshan-vdot
+> 项目：2026CIE · qxriscv · xiangshan-vdot（v1.3 三模式：INT8 + INT4 打包 + BitNet b1.58 三值）
 > 用途：按官方业务流程（1.1/1.2/1.3、2.1/2.2/2.3、3.1.1/3.1.2/3.2/3.3）逐步骤留痕，
 > 供三阶段文档与视频提交位使用。
 
@@ -8,10 +8,10 @@
 
 | 阶段 | 对应官方要求 | 步骤 | 截图 | 原版录屏 | 解说字幕版 |
 |---|---|---|---|---|---|
-| 阶段一 环境搭建与 RTL 链路贯通 | 1.1 / 1.2 / 1.3 | 7 | 16 张 | [stage1_environment.mp4](stage1_environment/video/stage1_environment.mp4) 00:52.93 / 696 KB | [stage1_environment_narrated.mp4](stage1_environment/video/stage1_environment_narrated.mp4) 00:53.93 / 1.5 MB |
-| 阶段二 设计实现与 RTL 验证 | 2.1 / 2.2 / 2.3 | 7 | 14 张 | [stage2_design_rtl.mp4](stage2_design_rtl/video/stage2_design_rtl.mp4) 00:44.70 / 441 KB | [stage2_design_rtl_narrated.mp4](stage2_design_rtl/video/stage2_design_rtl_narrated.mp4) 00:45.00 / 1.1 MB |
-| 阶段三 NEMU 扩展、协同仿真与加速评估 | 3.1.1 / 3.1.2 / 3.2 / 3.3 | 7 | 14 张 | [stage3_nemu_cosim.mp4](stage3_nemu_cosim/video/stage3_nemu_cosim.mp4) 00:46.93 / 599 KB | [stage3_nemu_cosim_narrated.mp4](stage3_nemu_cosim/video/stage3_nemu_cosim_narrated.mp4) 00:47.27 / 1.2 MB |
-| 阶段四 收口、综合评估与提交检查 | 质量/提交门径 | 5 | 10 张 | [stage4_release.mp4](stage4_release/video/stage4_release.mp4) 00:35.10 / 406 KB | [stage4_release_narrated.mp4](stage4_release/video/stage4_release_narrated.mp4) 00:35.30 / 880 KB |
+| 阶段一 环境搭建与 RTL 链路贯通 | 1.1 / 1.2 / 1.3 | 7 | 16 张 | [stage1_environment.mp4](stage1_environment/video/stage1_environment.mp4) 01:17.80 / 899 KB | [stage1_environment_narrated.mp4](stage1_environment/video/stage1_environment_narrated.mp4) 01:17.80 / 1.7 MB |
+| 阶段二 设计实现与 RTL 验证 | 2.1 / 2.2 / 2.3 | 8 | 16 张 | [stage2_design_rtl.mp4](stage2_design_rtl/video/stage2_design_rtl.mp4) 01:20.20 / 830 KB | [stage2_design_rtl_narrated.mp4](stage2_design_rtl/video/stage2_design_rtl_narrated.mp4) 01:20.20 / 1.8 MB |
+| 阶段三 NEMU 扩展、协同仿真与加速评估 | 3.1.1 / 3.1.2 / 3.2 / 3.3 | 8 | 16 张 | [stage3_nemu_cosim.mp4](stage3_nemu_cosim/video/stage3_nemu_cosim.mp4) 01:19.60 / 1.0 MB | [stage3_nemu_cosim_narrated.mp4](stage3_nemu_cosim/video/stage3_nemu_cosim_narrated.mp4) 01:19.60 / 2.0 MB |
+| 阶段四 收口、综合评估与提交检查 | 质量/提交门径 | 6 | 12 张 | [stage4_release.mp4](stage4_release/video/stage4_release.mp4) 01:02.00 / 675 KB | [stage4_release_narrated.mp4](stage4_release/video/stage4_release_narrated.mp4) 01:02.00 / 1.4 MB |
 
 - 每个步骤固定两张截图：`<NN>_<slug>_command.png`（命令与官方要求标签）、`<NN>_<slug>_result.png`（真实输出）。
 - 阶段一步骤 1-7 另含两张 GTKWave 实景截图：`07_gtkwave_wave1.png`（全流水）、`07_gtkwave_wave2.png`（执行/写回放大）。
@@ -41,11 +41,12 @@
 |---|---|---|---|
 | 2-1 | 2.1 设计文档 | `design.md` 章节结构（语义、位宽、数据通路、时序、集成） | `01_design_doc_*.png` |
 | 2-2 | 2.2 RTL 实现 | `VDot.v` / `VDotCore.sv` 行数与文件信息 | `02_rtl_files_*.png` |
-| 2-3 | 2.3 单元测试 | 1518/1518、3 cycle、1.0 inst·cycle⁻¹（截图对应 v1.2 单模式历史回放；v1.3 三模式为 3047/3047、MAC/cycle 8:16:16） | `03_unit_regression_*.png` |
-| 2-4 | 2.3 单元测试 | 行覆盖率 36/36 与 Chisel 等价回归 1518/1518（v1.3 已更新为 55/55、3047/3047，见 `docs/phase2/logs/`） | `04_coverage_*.png` |
-| 2-5 | 2.2 昆明湖 V2 集成 | 香山 emu 定向用例 7/7、difftest 0 mismatch | `05_emu_directed_*.png` |
-| 2-6 | 2.3 单元测试 | 非法配置用例 5/5 触发 trap | `06_emu_illegal_*.png` |
-| 2-7 | 2.2 昆明湖 V2 集成 | `apply_xiangshan_patch.sh check` + 补丁 numstat：5 文件 +157/−7（v1.3 三模式） | `07_xs_patch_*.png` |
+| 2-3 | 2.3 单元测试 | 3047/3047、3 cycle、1.0 inst·cycle⁻¹、21588 cycles（三模式） | `03_unit_regression_*.png` |
+| 2-4 | 2.3 单元测试 | 行覆盖率 55/55 与 Chisel 等价 3047/3047 | `04_coverage_*.png` |
+| 2-5 | 2.1 / 2.2 | 三条指令 funct6 对照（111111 / 111110 / 111101）；`int4_nibble 16/16`、`ternary_boundary 3/3`、`reserved_mode PASS`、`mac_per_cycle int8=8 int4x2=16 vtdot=16` | `05_mode_family_*.png` |
+| 2-6 | 2.2 昆明湖 V2 集成 | 香山 emu 定向用例 7/7、difftest 0 mismatch | `06_emu_directed_*.png` |
+| 2-7 | 2.3 单元测试 | 非法配置用例 5/5 触发 trap | `07_emu_illegal_*.png` |
+| 2-8 | 2.2 昆明湖 V2 集成 | `apply_xiangshan_patch.sh check` + 补丁 numstat：5 文件 +157/−7（1 个 VFu、7 个挂点） | `08_xs_patch_*.png` |
 
 ## 4. 阶段三：NEMU 扩展、协同仿真与加速评估
 
@@ -54,12 +55,13 @@
 | 步骤 | 官方要求 | 屏幕内容 | 截图 |
 |---|---|---|---|
 | 3-1 | 3.1.1 参考模型扩展 | NEMU 补丁 diffstat + 反向 apply 校验（PATCH CONSISTENT） | `01_patch_*.png` |
-| 3-2 | 3.1.2 / 3.2 协同仿真 | 1513/1513、边界自检、动态指令数（真实日志回放） | `02_cosim_*.png` |
-| 3-3 | 3.2 协同仿真 | `rtl_vs_nemu` 1513 vs 1513，0 mismatch | `03_rtl_diff_*.png` |
-| 3-4 | 3.2 基线功能实现 | 纯 RVV 基线 1513/1513、6→1 数据通路指令 | `04_baseline_*.png` |
-| 3-5 | 3.3 性能评估 | 单元级 3 cycle / 1.0 inst·cycle⁻¹ | `05_unit_perf_*.png` |
-| 3-6 | 3.3 加速比 / G5 | emu 四内核 3 次重复：中位数、极差 0、per-iter 与 9.8×/11.8× | `06_perf_repeat_*.png` |
-| 3-7 | 3.3 加速比 | `(C_k−C_empty)/NITER` 核算与加速比打印 | `07_speedup_*.png` |
+| 3-2 | 3.1.2 / 3.2 协同仿真 | 3032 用例（INT8 1513 / INT4 759 / 三值 760）、4551 结果字、边界自检（真实日志回放） | `02_cosim_*.png` |
+| 3-3 | 3.2 协同仿真 | `rtl_vs_nemu` lines=4551/nemu=4551，mismatch=0；双结果按 r0/r1 两行比对 | `03_rtl_diff_*.png` |
+| 3-4 | 3.2 协同仿真 | 边界 `vl=0` 不写回 3/3；四类非法配置三模式各一次，12/12 | `04_boundary_*.png` |
+| 3-5 | 3.2 基线功能实现 | 纯 RVV 基线 1513/1513、数据通路指令 6→1、单用例核心指令 14→7 | `05_baseline_*.png` |
+| 3-6 | 3.3 性能评估 | 单元级 3 cycle / 1.0 inst·cycle⁻¹ | `06_unit_perf_*.png` |
+| 3-7 | 3.3 加速比 / G5 | emu 四内核 3 次重复：极差 0、0.5075 cycle/点积 | `07_perf_repeat_*.png` |
+| 3-8 | 3.3 加速比 | `(C_k−C_empty)/NITER` 核算：对标量 9.8×（8-lane 公平）、对 RVV 11.8×（16-lane 上界） | `08_speedup_*.png` |
 
 ## 5. 阶段四：收口、综合评估与提交检查
 
@@ -68,10 +70,11 @@
 | 步骤 | 门径 | 屏幕内容 | 截图 |
 |---|---|---|---|
 | 4-1 | 质量门径 | Verilator `-Wall` 严格 lint，无 Warning/Error | `01_lint_*.png` |
-| 4-2 | 质量门径 | Yosys generic 综合：4186 单元、最长路径 25 级 | `02_synth_*.png` |
-| 4-3 | 质量门径 | 面积量级 ≈5.3k–8.4k GE | `03_area_*.png` |
-| 4-4 | 提交门径 | `scripts/run_all.sh` 七步回归全 PASS（真实执行回放） | `04_run_all_*.png` |
-| 4-5 | 提交门径 | 检查表已勾选 29 项 + 视频提交位置条目 | `05_checklist_*.png` |
+| 4-2 | 质量门径 | Yosys 0.52 三模式现场综合：7427 单元 / 356 FF / 最长 25 级 | `02_synth3_*.png` |
+| 4-3 | 质量门径 | INT8 单模式对照（日志回放）：4187 单元 / 172 FF / 25 级 | `03_synth_int8_*.png` |
+| 4-4 | 质量门径 | 面积 ≈10.1k–15.8k GE；增量 +3240（+77.4%）；关键路径起终点不变 | `04_area_*.png` |
+| 4-5 | 提交门径 | `scripts/run_all.sh` 七步回归全 PASS（真实执行回放） | `05_run_all_*.png` |
+| 4-6 | 提交门径 | 检查表已勾选 29 项 + 视频提交位置条目 | `06_checklist_*.png` |
 
 ## 6. 复现方式
 
@@ -88,7 +91,7 @@ python3 scripts/make_stage_narration.py        # 四阶段解说字幕版（需 
 
 - 本机为无图形界面的 Linux 终端，无法直接抓取桌面录屏；因此录屏由**真实命令输出**渲染成终端帧后经 ffmpeg 编码，画面中的命令、输出与退出状态均来自本机执行。
 - 阶段一 1-7 的 GTKWave 画面是在 `Xvfb` 虚拟显示器中真实打开 8200–8360 的 vadd VCD 后截取，不是合成示意图；`.gtkw` 与截图保存在 `docs/phase1/wave/`，VCD 可用 emu `--dump-wave` 复现。
-- `emu`、NEMU 协同仿真、`run_all.sh` 等单次耗时较长（数十秒至数分钟），为避免录屏等待，这些步骤回放 `docs/` 下**已捕获的真实日志**，并在画面中用黄色注记标明"长耗时步骤：回放已捕获的真实日志"；其余步骤为本次现场执行。
+- `emu`、NEMU 协同仿真、`run_all.sh` 等单次耗时较长（数十秒至数分钟），为避免录屏等待，这些步骤回放 `docs/` 下**已捕获的真实日志**，并在画面中用黄色注记标明"长耗时步骤：回放已捕获的真实日志"；其余步骤为本次现场执行。阶段四 4-2 的 Yosys 三模式综合为现场执行，4-3 的 INT8 对照为日志回放。
 - 完整未截断的命令输出见各阶段 `transcript.txt`；回归证据见 [run_all.log](_evidence/run_all.log) 与 [阶段三最终报告](../phase3/final_report.md)。
 
 ## 8. 与提交位的对应

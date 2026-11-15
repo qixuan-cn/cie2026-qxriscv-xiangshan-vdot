@@ -1,0 +1,906 @@
+diff --git a/Makefile b/Makefile
+index c23c7e0..a585093 100644
+--- a/Makefile
++++ b/Makefile
+@@ -68,6 +68,7 @@ SRCS-$(CONFIG_HAS_AUDIO) += src/device/audio.c
+ SRCS-$(CONFIG_HAS_DISK) += src/device/disk.c
+ SRCS-$(CONFIG_HAS_SDCARD) += src/device/sdcard.c
+ SRCS-$(CONFIG_HAS_FLASH) += src/device/flash.c
++SRCS-$(CONFIG_TPU_DEV) += src/device/tpu.c src/device/tpu_ref_model.c
+ 
+ DIRS-y += src/profiling
+ DIRS-y += src/checkpoint
+diff --git a/src/device/Kconfig b/src/device/Kconfig
+index 0b6c3af..c422583 100644
+--- a/src/device/Kconfig
++++ b/src/device/Kconfig
+@@ -235,4 +235,18 @@ config FLASH_IMG_PATH
+   default ""
+ endif # HAS_FLASH
+ 
++menuconfig TPU_DEV
++  bool "Enable RiscvTpu device model"
++  default n
++  help
++    Map the RiscvTpu V1 descriptor engine as an MMIO device. The reference
++    model in tpu_ref_model.c executes descriptor chains against NEMU's
++    physical memory when the doorbell (CTRL.RUN or DQ_HEAD write) fires.
++
++if TPU_DEV
++config TPU_MMIO
++  hex "MMIO base address of the RiscvTpu CSR window"
++  default 0x40000000
++endif # TPU_DEV
++
+ endif # DEVICE
+diff --git a/src/device/device.c b/src/device/device.c
+index 4a9c099..2bf7876 100644
+--- a/src/device/device.c
++++ b/src/device/device.c
+@@ -36,6 +36,7 @@ void init_disk();
+ void init_sdcard();
+ void init_flash();
+ void load_flash_contents(const char *);
++void init_tpu();
+ 
+ void send_key(uint8_t, bool);
+ void vga_update_screen();
+@@ -99,6 +100,7 @@ void init_device() {
+   IFDEF(CONFIG_HAS_DISK, init_disk());
+   IFDEF(CONFIG_HAS_SDCARD, init_sdcard());
+   IFDEF(CONFIG_HAS_FLASH, init_flash());
++  IFDEF(CONFIG_TPU_DEV, init_tpu());
+ 
+   // host alarm for device and timer update.
+   add_alarm_handle(set_device_update_flag);
+diff --git a/src/device/tpu.c b/src/device/tpu.c
+new file mode 100644
+index 0000000..f937342
+--- /dev/null
++++ b/src/device/tpu.c
+@@ -0,0 +1,90 @@
++//=============================================================================
++// tpu.c -- RiscvTpu 设备模型（NEMU 侧，T2/T3a）
++//
++// MMIO 布局：CONFIG_TPU_MMIO 起 0x100 字节，与 docs/03 的 CSR 偏移一致。
++// 语义：CSR 写直达 tpu_ref_model.c；写 DQ_HEAD 或 CTRL.RUN=1 触发一次门铃，
++//       设备同步执行描述符链（与 RTL 的「跑完才让 CPU 继续」在功能上等价）。
++// DMA：描述符里的 DRAM 读写通过 guest_to_host() 落到 NEMU 物理内存，
++//       因此与 CPU 看到的是同一份内存镜像。
++//=============================================================================
++#include <common.h>
++#include <device/map.h>
++#include <memory/paddr.h>
++#include <utils.h>
++
++#include <string.h>
++
++#include "tpu.h"
++#include "tpu_difftest.h"
++
++static tpu_ref_t *tpu_ref;
++static uint8_t   *tpu_csr_space;
++
++// ---------------------------------------------------------------- DRAM 访问
++static void tpu_mem_read(void *ctx, uint32_t addr, void *buf, uint32_t n) {
++  (void)ctx;
++  memcpy(buf, guest_to_host(addr), n);
++}
++
++static void tpu_mem_write(void *ctx, uint32_t addr, const void *buf, uint32_t n,
++                          uint64_t strb) {
++  (void)ctx;
++  uint8_t *h = guest_to_host(addr);
++  const uint8_t *in = (const uint8_t *)buf;
++  for (uint32_t i = 0; i < n; i++)
++    if (strb & (1ull << i)) h[i] = in[i];
++}
++
++static const tpu_mem_ops tpu_mem_impl = { tpu_mem_read, tpu_mem_write };
++
++// ---------------------------------------------------------------- MMIO
++static uint32_t csr_get(uint32_t off) {
++  uint32_t v;
++  memcpy(&v, tpu_csr_space + (off & ~3u), 4);
++  return v;
++}
++
++static void csr_put(uint32_t off, uint32_t v) {
++  memcpy(tpu_csr_space + (off & ~3u), &v, 4);
++}
++
++static void tpu_io_handler(uint32_t offset, int len, bool is_write) {
++  (void)len;
++  uint32_t off = offset & 0xFFFu;
++  if (is_write) {
++    uint32_t val = csr_get(off);
++    tpu_ref_csr_write(tpu_ref, off, val);
++    // RTL 在写 DQ_HEAD 与 CTRL.RUN=1 时都会拉高 start pulse
++    if (off == TPU_CS_DQ_HEAD || (off == TPU_CS_CTRL && (val & 1u)))
++      tpu_ref_doorbell(tpu_ref);
++  } else {
++    csr_put(off, tpu_ref_csr_read(tpu_ref, off));
++  }
++}
++
++void init_tpu(void) {
++  tpu_csr_space = new_space(0x100);
++  memset(tpu_csr_space, 0, 0x100);
++  tpu_ref = tpu_ref_create(&tpu_mem_impl, NULL);
++  add_mmio_map("tpu", CONFIG_TPU_MMIO, tpu_csr_space, 0x100, tpu_io_handler);
++}
++
++// ---------------------------------------------------------------- 导出接口
++uint32_t tpu_dev_csr_read(uint32_t off) {
++  return tpu_ref_csr_read(tpu_ref, off);
++}
++void tpu_dev_csr_write(uint32_t off, uint32_t val) {
++  tpu_ref_csr_write(tpu_ref, off, val);
++}
++uint32_t tpu_dev_tmem_read(uint32_t idx) {
++  return tpu_ref_tmem_read(tpu_ref, idx);
++}
++int tpu_dev_state(void) {
++  return tpu_ref_state(tpu_ref);
++}
++int tpu_dev_retire_count(void) {
++  return tpu_ref_retire_count(tpu_ref);
++}
++int tpu_dev_doorbell(void) {
++  return tpu_ref_doorbell(tpu_ref);
++}
+diff --git a/src/device/tpu.h b/src/device/tpu.h
+new file mode 100644
+index 0000000..c176b22
+--- /dev/null
++++ b/src/device/tpu.h
+@@ -0,0 +1,22 @@
++//=============================================================================
++// tpu.h -- RiscvTpu 设备模型在 NEMU 中的公共接口
++//
++// 该设备把 docs/03 的寄存器契约映射为 MMIO 窗口，门铃（CTRL.RUN 或 DQ_HEAD
++// 写）触发 tpu_ref_model.c 在 NEMU 物理地址空间上执行描述符链。
++//=============================================================================
++#ifndef __DEVICE_TPU_H__
++#define __DEVICE_TPU_H__
++
++#include <stdint.h>
++
++void     init_tpu(void);
++
++// 供 difftest 桥接 / 行为模型复用的只读接口（T3a）
++uint32_t tpu_dev_csr_read(uint32_t off);
++void     tpu_dev_csr_write(uint32_t off, uint32_t val);
++uint32_t tpu_dev_tmem_read(uint32_t idx);
++int      tpu_dev_state(void);
++int      tpu_dev_retire_count(void);
++int      tpu_dev_doorbell(void);
++
++#endif // __DEVICE_TPU_H__
+diff --git a/src/device/tpu_difftest.h b/src/device/tpu_difftest.h
+new file mode 100644
+index 0000000..a62ec95
+--- /dev/null
++++ b/src/device/tpu_difftest.h
+@@ -0,0 +1,154 @@
++//=============================================================================
++// tpu_difftest.h -- RiscvTpu 设备级 difftest 公共接口（T2）
++//
++// 两个消费方共用同一份 C 参考模型：
++//   * 独立 difftest 主程序（本目录，DUT = Verilator tpu_sim_top）
++//   * NEMU 设备模型（nemu/src/device/tpu.c，REF = NEMU 地址空间）
++//
++// 提交点是「描述符退休」（DRAIN），不是指令退休。比对分三档：
++//   必须相等：CSR 白名单、TMEM 全部、DRAM 全部、退休地址序列
++//   忽略：CYCLES / STALL_MEM（与周期相关）
++//   归一化：STATUS 的 irq/timeout 位不参与比较
++//=============================================================================
++#ifndef TPU_DIFFTEST_H
++#define TPU_DIFFTEST_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// ---------------------------------------------------------------- 结构参数
++#define TPU_D          64
++#define TPU_GROUP      16
++#define TPU_NGROUP     4
++#define TPU_MCOLS      8
++#define TPU_ACT_ROWS   64
++#define TPU_ACT_BLOCKS 32
++#define TPU_ACT_NBLK   2048
++#define TPU_TMEM_WORDS 16384
++#define TPU_MEM_BYTES  (1u << 20)   // 与 tpu_sim_top 的 MEM_BYTES 一致
++
++// ---------------------------------------------------------------- 描述符
++#define TPU_DESC_BYTES 64
++
++// ---------------------------------------------------------------- CSR 偏移
++#define TPU_CS_ID        0x000
++#define TPU_CS_VERSION   0x004
++#define TPU_CS_CTRL      0x008
++#define TPU_CS_STATUS    0x00C
++#define TPU_CS_DQ_BASE   0x010
++#define TPU_CS_DQ_HEAD   0x014
++#define TPU_CS_DQ_TAIL   0x018
++#define TPU_CS_CYCLES_LO 0x01C
++#define TPU_CS_CYCLES_HI 0x020
++#define TPU_CS_ICOUNT    0x024
++#define TPU_CS_MAC_LO    0x028
++#define TPU_CS_MAC_HI    0x02C
++#define TPU_CS_STALL_MEM 0x030
++#define TPU_CS_RET_INT8  0x034
++#define TPU_CS_RET_INT4  0x038
++#define TPU_CS_RET_TERN  0x03C
++#define TPU_CS_CAPS      0x040
++#define TPU_CS_ERROR     0x044
++#define TPU_CS_DMA_LO    0x048
++#define TPU_CS_DMA_HI    0x04C
++#define TPU_CS_DBG_DESC  0x050
++#define TPU_CS_DBG_STATE 0x054
++#define TPU_CS_DBG_ACC0  0x058
++#define TPU_CS_DBG_ACC1  0x05C
++
++// ---------------------------------------------------------------- op / prec
++#define TPU_OP_GEMM  0x01
++#define TPU_OP_COPY  0x02
++#define TPU_OP_QUANT 0x03
++#define TPU_OP_BAR   0x04
++#define TPU_OP_NOP   0x05
++#define TPU_OP_END   0x06
++
++// ---------------------------------------------------------------- 状态
++#define TPU_S_IDLE  0
++#define TPU_S_FETCH 1
++#define TPU_S_CHECK 2
++#define TPU_S_DISP  3
++#define TPU_S_RUN   4
++#define TPU_S_DRAIN 5
++#define TPU_S_HALT  6
++#define TPU_S_ERR   7
++
++// ---------------------------------------------------------------- 错误码
++#define TPU_E_NONE       0x00
++#define TPU_E_DESC_ALIGN 0x01
++#define TPU_E_DESC_RANGE 0x02
++#define TPU_E_DESC_OP    0x03
++#define TPU_E_DESC_FLAGS 0x04
++#define TPU_E_SHAPE      0x05
++#define TPU_E_ADDR_ALIGN 0x06
++#define TPU_E_AXI_DECERR 0x07
++#define TPU_E_AXI_SLVERR 0x08
++#define TPU_E_TIMEOUT    0x09
++#define TPU_E_ACC_OVF    0x0A
++#define TPU_E_SBUF       0x0B
++
++// ---------------------------------------------------------------- 存储器接口
++// 参考模型通过该接口访问「DRAM」。独立模式填 flat 1 MiB 数组；NEMU 模式填
++// paddr_read/paddr_write。n 通常为 64（权重/描述符）或 4（scale）。
++// write 的 strb 按字节掩码，n <= 64。
++typedef struct {
++  void (*read)(void *ctx, uint32_t addr, void *buf, uint32_t n);
++  void (*write)(void *ctx, uint32_t addr, const void *buf, uint32_t n,
++                uint64_t strb);
++} tpu_mem_ops;
++
++// ---------------------------------------------------------------- 参考模型
++typedef struct tpu_ref tpu_ref_t;
++
++tpu_ref_t *tpu_ref_create(const tpu_mem_ops *ops, void *ctx);
++void       tpu_ref_destroy(tpu_ref_t *r);
++void       tpu_ref_reset(tpu_ref_t *r);
++
++uint32_t   tpu_ref_csr_read(tpu_ref_t *r, uint32_t off);
++void       tpu_ref_csr_write(tpu_ref_t *r, uint32_t off, uint32_t val);
++
++void       tpu_ref_tmem_write(tpu_ref_t *r, uint32_t idx, uint32_t val);
++uint32_t   tpu_ref_tmem_read(tpu_ref_t *r, uint32_t idx);
++void       tpu_ref_act_write(tpu_ref_t *r, uint32_t idx, uint32_t off,
++                             uint64_t data);
++
++// 执行一次门铃（门铃前调用方已写好 DQ_HEAD）。返回退休描述符数。
++// 运行终止状态可用 tpu_ref_state() 读取（TPU_S_HALT / TPU_S_ERR）。
++int        tpu_ref_doorbell(tpu_ref_t *r);
++int        tpu_ref_state(tpu_ref_t *r);
++int        tpu_ref_retire_count(tpu_ref_t *r);
++uint32_t   tpu_ref_retire_addr(tpu_ref_t *r, int i);
++
++// ---------------------------------------------------------------- DUT 封装
++typedef struct tpu_dut tpu_dut_t;
++
++tpu_dut_t *tpu_dut_create(void);
++void       tpu_dut_destroy(tpu_dut_t *d);
++void       tpu_dut_reset(tpu_dut_t *d);
++
++void       tpu_dut_dram_write(tpu_dut_t *d, uint32_t addr, const uint8_t *buf,
++                              uint32_t n);
++void       tpu_dut_dram_read(tpu_dut_t *d, uint32_t addr, uint8_t *buf,
++                             uint32_t n);
++uint32_t   tpu_dut_csr_read(tpu_dut_t *d, uint32_t off);
++void       tpu_dut_csr_write(tpu_dut_t *d, uint32_t off, uint32_t val);
++void       tpu_dut_tmem_write(tpu_dut_t *d, uint32_t idx, uint32_t val);
++uint32_t   tpu_dut_tmem_read(tpu_dut_t *d, uint32_t idx);
++void       tpu_dut_act_write(tpu_dut_t *d, uint32_t idx, uint32_t off,
++                             uint64_t data);
++
++// 跑到 HALT/ERR 或 max_cycles；把每次 DRAIN 的 cur_addr 依次写入 retire。
++// 返回退休描述符数；d->state 可由 tpu_dut_state() 读取。
++int        tpu_dut_run(tpu_dut_t *d, int max_cycles, uint32_t *retire,
++                       int max_retire);
++int        tpu_dut_state(tpu_dut_t *d);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // TPU_DIFFTEST_H
+diff --git a/src/device/tpu_ref_model.c b/src/device/tpu_ref_model.c
+new file mode 100644
+index 0000000..775ccff
+--- /dev/null
++++ b/src/device/tpu_ref_model.c
+@@ -0,0 +1,561 @@
++//=============================================================================
++// tpu_ref_model.c -- RiscvTpu V1 设备级参考模型（T2）
++//
++// 这是一份「独立于 Verilator RTL」的 C 实现：完全按 docs/03 的数值契约与
++// rtl/tpu_{top,csr,mxu,quant,copy,act,tmem}.sv 的时序语义重写，不调用 Python
++// 黄金模型，从而打破 T0 的共模误差。
++//
++// 提交模型：一次门铃从 DQ_HEAD 开始，按描述符链跑到 HALT 或 ERR；
++// 每个 DRAIN 视为一次「退休」，记录 cur_addr。
++//
++// 数值原语（f_mul / f_add / f_i2f48 / f_scale_pow2）逐行移植 tpu_pkg.sv。
++//=============================================================================
++#include "tpu_difftest.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++#define F_ACC   (1u << 0)
++#define F_RMAX  (1u << 1)
++#define F_ASCL  (1u << 2)
++#define F_RELU  (1u << 3)
++#define F_TB    (1u << 4)
++#define F_ZP    (1u << 5)
++#define F_PAIR  (1u << 6)
++#define FLAGS_V1 0x29u
++
++#define RETIRE_MAX 4096
++
++struct tpu_ref {
++  const tpu_mem_ops *ops;
++  void *ctx;
++
++  uint8_t *act;   // TPU_ACT_NBLK * 64
++  uint8_t *scl;   // TPU_ACT_NBLK * 8
++  uint32_t *tmem; // TPU_TMEM_WORDS
++
++  uint32_t dq_base, dq_head, dq_tail;
++  uint32_t ctrl;
++  uint8_t  err_code;
++  uint8_t  irq_pend;
++  uint8_t  tmem_dirty;
++  uint8_t  timeout_flag;
++
++  uint32_t icount;
++  uint64_t mac;
++  uint64_t dma;
++  uint32_t ret_i8, ret_i4, ret_tn;
++
++  int      state;
++  uint32_t cur_addr;
++
++  uint32_t retire[RETIRE_MAX];
++  int      nretire;
++};
++
++// ---------------------------------------------------------------- fp32 原语
++static uint32_t f_i2f48(int64_t v) {
++  int      sgn = (v < 0);
++  uint64_t mag = sgn ? (uint64_t)(-v) : (uint64_t)v;
++  mag &= 0xFFFFFFFFFFFFull;
++  if (mag == 0) return 0;
++  int h = 0;
++  for (int i = 0; i < 48; i++) if ((mag >> i) & 1ull) h = i;
++  uint32_t m25;
++  if (h >= 23) {
++    uint32_t shf = (uint32_t)((mag >> (h - 23)) & 0xFFFFFFu);
++    m25 = shf;
++    int gd = 0, st = 0;
++    if (h >= 24) {
++      gd = (int)((mag >> (h - 24)) & 1ull);
++      uint64_t lowmask = (1ull << (h - 24)) - 1ull;
++      st = (mag & lowmask) != 0;
++    }
++    if (gd && (st || (m25 & 1u))) m25++;
++    if (m25 & (1u << 24)) { m25 >>= 1; h++; }
++  } else {
++    m25 = (uint32_t)((mag << (23 - h)) & 0xFFFFFFu);
++  }
++  return ((uint32_t)sgn << 31) | ((uint32_t)(h + 127) << 23) | (m25 & 0x7FFFFFu);
++}
++
++static uint32_t f_mul(uint32_t a, uint32_t b) {
++  uint32_t ea = (a >> 23) & 0xFFu, eb = (b >> 23) & 0xFFu;
++  if (ea == 0 || eb == 0) return 0;
++  if (ea == 0xFF || eb == 0xFF) return 0;
++  uint32_t sg = (a ^ b) & 0x80000000u;
++  uint64_t p = (uint64_t)(0x800000u | (a & 0x7FFFFFu)) *
++               (uint64_t)(0x800000u | (b & 0x7FFFFFu));
++  int e = (int)ea + (int)eb - 127;
++  if (p & (1ull << 47)) { p = (p >> 1) | (p & 1ull); e++; }
++  uint32_t m24 = (uint32_t)((p >> 23) & 0x7FFFFFu);   // {1'b0, p[45:23]}
++  uint32_t guard = (uint32_t)((p >> 22) & 1u);
++  uint32_t sticky = (p & 0x3FFFFFu) != 0;
++  uint32_t lsb = (uint32_t)((p >> 23) & 1u);
++  if (guard && (sticky || lsb)) m24++;
++  if (m24 & 0x800000u) { m24 >>= 1; e++; }
++  if (e <= 0) return 0;
++  if (e >= 255) return sg | 0x7F800000u;
++  return sg | ((uint32_t)e << 23) | (m24 & 0x7FFFFFu);
++}
++
++static uint32_t f_add(uint32_t a, uint32_t b) {
++  uint32_t ea0 = (a >> 23) & 0xFFu, eb0 = (b >> 23) & 0xFFu;
++  uint32_t av = (ea0 == 0 || ea0 == 0xFF) ? 0 : a;
++  uint32_t bv = (eb0 == 0 || eb0 == 0xFF) ? 0 : b;
++  if ((av & 0x7FFFFFFFu) == 0)
++    return ((bv & 0x7FFFFFFFu) == 0) ? 0 : bv;
++  if ((bv & 0x7FFFFFFFu) == 0) return av;
++  uint32_t hi, lo;
++  if ((av & 0x7FFFFFFFu) >= (bv & 0x7FFFFFFFu)) { hi = av; lo = bv; }
++  else { hi = bv; lo = av; }
++  uint32_t ea = (hi >> 23) & 0xFFu, eb = (lo >> 23) & 0xFFu;
++  uint32_t ma = (0x800000u | (hi & 0x7FFFFFu)) << 5;   // 29 bit
++  uint32_t mb = (0x800000u | (lo & 0x7FFFFFu)) << 5;
++  int d = (int)ea - (int)eb;
++  if (d > 27) d = 27;
++  uint32_t st = (d == 0) ? 0 : ((mb & ((1u << d) - 1u)) != 0);
++  mb = (mb >> d) | st;
++  uint32_t ms = ((hi >> 31) == (lo >> 31)) ? (ma + mb) : (ma - mb);
++  if (ms == 0) return 0;
++  int h = 0;
++  for (int i = 0; i <= 30; i++) if ((ms >> i) & 1u) h = i;
++  int e = (int)ea + (h - 28);
++  if (h > 28) {
++    st = (ms & ((1u << (h - 28)) - 1u)) != 0;
++    ms = (ms >> (h - 28)) | st;
++  } else if (h < 28) {
++    ms = ms << (28 - h);
++  }
++  if ((ms & 0x10u) && (((ms & 0xFu) != 0) || (ms & 0x20u))) ms += 32u;
++  if (ms & (1u << 29)) { ms >>= 1; e++; }
++  if (e <= 0) return 0;
++  if (e >= 255) return (hi & 0x80000000u) | 0x7F800000u;
++  return (hi & 0x80000000u) | ((uint32_t)e << 23) | ((ms >> 5) & 0x7FFFFFu);
++}
++
++static uint32_t f_scale_pow2(uint32_t x, int e) {
++  uint32_t p = (uint32_t)((127 + e) & 0xFF) << 23;
++  return f_mul(x, p);
++}
++
++// ---------------------------------------------------------------- 存储器
++static void mem_rd(tpu_ref_t *r, uint32_t addr, void *buf, uint32_t n) {
++  r->ops->read(r->ctx, addr, buf, n);
++}
++static void mem_wr(tpu_ref_t *r, uint32_t addr, const void *buf, uint32_t n,
++                   uint64_t strb) {
++  r->ops->write(r->ctx, addr, buf, n, strb);
++}
++
++// ---------------------------------------------------------------- 生命周期
++tpu_ref_t *tpu_ref_create(const tpu_mem_ops *ops, void *ctx) {
++  tpu_ref_t *r = (tpu_ref_t *)calloc(1, sizeof(tpu_ref_t));
++  if (!r) return NULL;
++  r->ops = ops;
++  r->ctx = ctx;
++  r->act = (uint8_t *)calloc(TPU_ACT_NBLK * 64u, 1);
++  r->scl = (uint8_t *)calloc(TPU_ACT_NBLK * 8u, 1);
++  r->tmem = (uint32_t *)calloc(TPU_TMEM_WORDS, sizeof(uint32_t));
++  if (!r->act || !r->scl || !r->tmem) {
++    tpu_ref_destroy(r);
++    return NULL;
++  }
++  tpu_ref_reset(r);
++  return r;
++}
++
++void tpu_ref_destroy(tpu_ref_t *r) {
++  if (!r) return;
++  free(r->act);
++  free(r->scl);
++  free(r->tmem);
++  free(r);
++}
++
++void tpu_ref_reset(tpu_ref_t *r) {
++  memset(r->act, 0, TPU_ACT_NBLK * 64u);
++  memset(r->scl, 0, TPU_ACT_NBLK * 8u);
++  memset(r->tmem, 0, TPU_TMEM_WORDS * sizeof(uint32_t));
++  r->dq_base = r->dq_head = r->dq_tail = 0;
++  r->ctrl = 0;
++  r->err_code = 0;
++  r->irq_pend = 0;
++  r->tmem_dirty = 0;
++  r->timeout_flag = 0;
++  r->icount = 0;
++  r->mac = r->dma = 0;
++  r->ret_i8 = r->ret_i4 = r->ret_tn = 0;
++  r->state = TPU_S_IDLE;
++  r->cur_addr = 0;
++  r->nretire = 0;
++}
++
++// ---------------------------------------------------------------- CSR
++uint32_t tpu_ref_csr_read(tpu_ref_t *r, uint32_t off) {
++  switch (off) {
++    case TPU_CS_ID:        return 0x52545650u;
++    case TPU_CS_VERSION:   return 0x01010840u;
++    case TPU_CS_CTRL:      return r->ctrl & 0xFFu;
++    case TPU_CS_STATUS: {
++      uint32_t v = 0;
++      v |= (uint32_t)(r->tmem_dirty & 1) << 7;
++      v |= (uint32_t)(r->irq_pend & 1) << 6;
++      v |= (uint32_t)(r->timeout_flag & 1) << 5;
++      v |= (uint32_t)(r->dq_head == r->dq_tail) << 3;
++      v |= (uint32_t)(r->err_code != 0) << 2;
++      v |= (uint32_t)(r->state == TPU_S_HALT) << 1;
++      v |= 0u;
++      return v;
++    }
++    case TPU_CS_DQ_BASE:   return r->dq_base;
++    case TPU_CS_DQ_HEAD:   return r->dq_head;
++    case TPU_CS_DQ_TAIL:   return r->dq_tail;
++    case TPU_CS_CYCLES_LO: return 0;
++    case TPU_CS_CYCLES_HI: return 0;
++    case TPU_CS_ICOUNT:    return r->icount;
++    case TPU_CS_MAC_LO:    return (uint32_t)r->mac;
++    case TPU_CS_MAC_HI:    return (uint32_t)(r->mac >> 32);
++    case TPU_CS_STALL_MEM: return 0;
++    case TPU_CS_RET_INT8:  return r->ret_i8;
++    case TPU_CS_RET_INT4:  return r->ret_i4;
++    case TPU_CS_RET_TERN:  return r->ret_tn;
++    case TPU_CS_CAPS:      return 0x27u;
++    case TPU_CS_ERROR:     return r->err_code;
++    case TPU_CS_DMA_LO:    return (uint32_t)r->dma;
++    case TPU_CS_DMA_HI:    return (uint32_t)(r->dma >> 32);
++    case TPU_CS_DBG_DESC:  return r->cur_addr;
++    case TPU_CS_DBG_STATE: return (uint32_t)r->state;
++    case TPU_CS_DBG_ACC0:  return 0;
++    case TPU_CS_DBG_ACC1:  return 0;
++    default:               return 0;
++  }
++}
++
++void tpu_ref_csr_write(tpu_ref_t *r, uint32_t off, uint32_t val) {
++  if (off == TPU_CS_CTRL) {
++    r->ctrl = val & 0xFFu;
++    if (val & 0x4u) {  // CTRL.CLR_CNT
++      r->icount = 0; r->mac = 0; r->dma = 0;
++      r->ret_i8 = r->ret_i4 = r->ret_tn = 0;
++    }
++    if (val & 0x2u) {  // CTRL.SOFT_RESET
++      r->state = TPU_S_IDLE;
++      r->tmem_dirty = 0;
++      r->timeout_flag = 0;
++    }
++  } else if (off == TPU_CS_DQ_BASE) {
++    r->dq_base = val;
++  } else if (off == TPU_CS_DQ_HEAD) {
++    r->dq_head = val;
++  } else if (off == TPU_CS_ERROR) {
++    if (val & 1u) r->err_code = 0;
++  }
++}
++
++// ---------------------------------------------------------------- 内部访问
++void tpu_ref_tmem_write(tpu_ref_t *r, uint32_t idx, uint32_t val) {
++  r->tmem[idx & (TPU_TMEM_WORDS - 1)] = val;
++}
++uint32_t tpu_ref_tmem_read(tpu_ref_t *r, uint32_t idx) {
++  return r->tmem[idx & (TPU_TMEM_WORDS - 1)];
++}
++void tpu_ref_act_write(tpu_ref_t *r, uint32_t idx, uint32_t off, uint64_t data) {
++  idx &= (TPU_ACT_NBLK - 1);
++  if (off < 8) memcpy(r->act + (size_t)idx * 64u + off * 8u, &data, 8);
++  else         memcpy(r->scl + (size_t)idx * 8u, &data, 8);
++}
++
++int tpu_ref_state(tpu_ref_t *r) { return r->state; }
++int tpu_ref_retire_count(tpu_ref_t *r) { return r->nretire; }
++uint32_t tpu_ref_retire_addr(tpu_ref_t *r, int i) {
++  return (i >= 0 && i < r->nretire) ? r->retire[i] : 0xFFFFFFFFu;
++}
++
++// ---------------------------------------------------------------- 校验
++static int check_desc(const uint32_t *w, uint32_t addr) {
++  uint32_t w0 = w[0];
++  if ((addr & 0x3Fu) != 0) return TPU_E_DESC_ALIGN;
++  if ((w0 >> 22) != 0 || (w[12] >> 16) != 0 || (w[15] >> 16) != 0 ||
++      (((w0 >> 8) & 0xFFu) & ~FLAGS_V1) != 0 ||
++      (((w0 >> 20) & 3u) == 3u))
++    return TPU_E_DESC_FLAGS;
++  uint32_t op = w0 & 0xFFu;
++  if (!(op == TPU_OP_GEMM || op == TPU_OP_COPY || op == TPU_OP_QUANT ||
++        op == TPU_OP_BAR || op == TPU_OP_NOP || op == TPU_OP_END))
++    return TPU_E_DESC_OP;
++  uint32_t sbuf = (w0 >> 16) & 0xFu;
++  if (sbuf > 1u) return TPU_E_SBUF;
++  uint32_t m = w[1], n = w[2], k = w[3];
++  uint32_t a = w[4], b = w[5], c = w[6], ldc = w[9], sc = w[10];
++  uint32_t prec = (w0 >> 20) & 3u;
++  if (op == TPU_OP_GEMM) {
++    if (m == 0 || m > 64u || n == 0 || k == 0 || k > 2048u) return TPU_E_SHAPE;
++    if ((uint32_t)(b + m * 32u) > 2048u) return TPU_E_DESC_RANGE;
++    if ((a & 0xFu) != 0 || (ldc & 3u) != 0 ||
++        ((prec == 0) ? ((sc & 3u) != 0) : ((sc & 7u) != 0)))
++      return TPU_E_ADDR_ALIGN;
++    if ((uint32_t)(c + (m - 1u) * (ldc >> 2) + n) > 16384u)
++      return TPU_E_DESC_RANGE;
++  } else if (op == TPU_OP_QUANT) {
++    if (m == 0 || m > 64u) return TPU_E_SHAPE;
++    if ((a & 3u) != 0 || (b & 3u) != 0 || (w[7] & 3u) != 0) return TPU_E_ADDR_ALIGN;
++    if ((uint32_t)(c + m) > 2048u) return TPU_E_DESC_RANGE;
++  } else if (op == TPU_OP_COPY) {
++    if (m == 0) return TPU_E_SHAPE;
++  }
++  return TPU_E_NONE;
++}
++
++// ---------------------------------------------------------------- 单元执行
++static int32_t grp_sum(const uint8_t *ab, const uint8_t *wb, uint32_t prec,
++                       int g, int cnt) {
++  int32_t s = 0;
++  for (int i = 0; i < TPU_GROUP; i++) {
++    int e = g * TPU_GROUP + i;
++    if (e >= cnt) continue;
++    int a = (int)(int8_t)ab[e];
++    int w;
++    if (prec == 0) {
++      w = (int)(int8_t)wb[e];
++    } else if (prec == 1) {
++      uint8_t byt = wb[e / 2];
++      int nib = (byt >> (4 * (e % 2))) & 0xF;
++      w = (nib & 8) ? nib - 16 : nib;
++    } else {
++      uint8_t byt = wb[e / 4];
++      int code = (byt >> (2 * (e % 4))) & 3;
++      w = (code == 1) ? 1 : (code == 2 ? -1 : 0);
++    }
++    int16_t p = (int16_t)(a * w);
++    int32_t t = s + (int32_t)p;
++    s = (int32_t)((t << 8) >> 8);   // 24-bit signed wrap
++  }
++  return s;
++}
++
++static void exec_gemm(tpu_ref_t *r, const uint32_t *w, int *mac_out,
++                      uint64_t *dma_out) {
++  uint32_t w0 = w[0];
++  uint32_t prec = (w0 >> 20) & 3u;
++  uint32_t flags = (w0 >> 8) & 0xFFu;
++  uint32_t m = w[1], n = w[2], k = w[3];
++  uint32_t a = w[4], b = w[5], c = w[6];
++  uint32_t lda = w[7], ldc = w[9], sc = w[10];
++  uint32_t k0 = w[12] & 0xFFFFu;
++  uint32_t srs = w[15] & 0xFFFFu;
++  uint32_t kb = (k + 63u) >> 6;
++  int W = (prec == 0) ? 16 : 11;
++  uint32_t blk_bytes = (prec == 0) ? 64u : (prec == 1 ? 32u : 16u);
++
++  uint32_t srs_eff = srs;
++  if (srs_eff == 0) srs_eff = (prec == 0) ? (4u + kb) : (8u + 4u * kb);
++
++  *mac_out = 0;
++  *dma_out = 0;
++  int ovf = 0;
++
++  for (uint32_t col = 0; col < n; col++) {
++    uint8_t sw[4];
++    mem_rd(r, sc + col * srs_eff, sw, 4);
++    uint32_t sw_bits = (uint32_t)sw[0] | ((uint32_t)sw[1] << 8) |
++                       ((uint32_t)sw[2] << 16) | ((uint32_t)sw[3] << 24);
++    for (uint32_t jg = 0; jg * TPU_MCOLS < m; jg++) {
++      int64_t acc[TPU_MCOLS];
++      uint32_t sa[TPU_MCOLS];
++      for (int cc = 0; cc < TPU_MCOLS; cc++) { acc[cc] = 0; sa[cc] = 0; }
++      for (uint32_t kb_i = 0; kb_i < kb; kb_i++) {
++        int cnt = (kb_i == kb - 1) ? (int)(k - (kb_i << 6)) : 64;
++        uint8_t wb[64];
++        mem_rd(r, a + col * lda + kb_i * blk_bytes, wb, 64);
++        uint8_t swd[4];
++        uint32_t saddr = (prec == 0)
++            ? (sc + col * srs_eff + 4u + k0 + kb_i)
++            : (sc + col * srs_eff + 8u + 4u * (k0 + kb_i));
++        mem_rd(r, saddr, swd, 4);
++        uint32_t sc_word = (uint32_t)swd[0] | ((uint32_t)swd[1] << 8) |
++                           ((uint32_t)swd[2] << 16) | ((uint32_t)swd[3] << 24);
++        uint32_t dw = (prec == 0) ? (sc_word & 0xFFu) : ((sc_word >> 0) & 0xFFu);
++        for (int cc = 0; cc < TPU_MCOLS; cc++) {
++          if (jg * TPU_MCOLS + (uint32_t)cc >= m) continue;
++          uint32_t idx = (b + (jg * TPU_MCOLS + (uint32_t)cc) * TPU_ACT_BLOCKS +
++                          kb_i) & (TPU_ACT_NBLK - 1);
++          const uint8_t *ab = r->act + (size_t)idx * 64u;
++          const uint8_t *sa_rec = r->scl + (size_t)idx * 8u;
++          if (kb_i == 0) {
++            sa[cc] = (uint32_t)sa_rec[0] | ((uint32_t)sa_rec[1] << 8) |
++                     ((uint32_t)sa_rec[2] << 16) | ((uint32_t)sa_rec[3] << 24);
++          }
++          for (int g = 0; g < TPU_NGROUP; g++) {
++            int sh = W - (int)dw - (int)sa_rec[4 + g];
++            uint32_t mul = (prec == 0) ? 1u : ((sc_word >> (8 + 6 * g)) & 0x3Fu);
++            if (sh < 0) continue;
++            int32_t gs = grp_sum(ab, wb, prec, g, cnt);
++            int64_t mg = (int64_t)((uint64_t)mul << (uint32_t)sh);
++            acc[cc] += mg * (int64_t)gs;
++          }
++          if (acc[cc] >= (int64_t)140737488355328LL ||
++              acc[cc] < -(int64_t)140737488355328LL)
++            ovf = 1;
++        }
++      }
++      // epilogue
++      for (int cc = 0; cc < TPU_MCOLS; cc++) {
++        if (jg * TPU_MCOLS + (uint32_t)cc >= m) continue;
++        uint32_t y = f_mul(f_mul(f_i2f48(acc[cc]), sw_bits),
++                           f_scale_pow2(sa[cc], -W));
++        if ((flags & F_RELU) && (y & 0x80000000u) && (y & 0x7FFFFFFFu))
++          y = 0;
++        uint32_t epi = (c + (jg * TPU_MCOLS + (uint32_t)cc) * (ldc >> 2) +
++                        col) & (TPU_TMEM_WORDS - 1);
++        if (flags & F_ACC) y = f_add(r->tmem[epi], y);
++        r->tmem[epi] = y;
++      }
++    }
++  }
++
++  if (ovf) {
++    r->state = TPU_S_ERR;
++    r->err_code = TPU_E_ACC_OVF;
++  }
++  *mac_out = (int)(uint64_t)m * n * kb * TPU_D;
++  *dma_out = 0;
++}
++
++static void exec_copy(tpu_ref_t *r, const uint32_t *w, uint64_t *dma_out) {
++  uint32_t w0 = w[0];
++  uint32_t mode = (w0 >> 16) & 1u;
++  uint32_t m = w[1];
++  uint32_t a = w[4], c = w[6];
++  uint32_t lda = w[7], ldb = w[8], ldc = w[9];
++  uint64_t dma = 0;
++  uint32_t beats = (lda + 63u) >> 6;
++  for (uint32_t row = 0; row < m; row++) {
++    for (uint32_t beat = 0; beat < beats; beat++) {
++      uint32_t nbytes = (lda - beat * 64u > 64u) ? 64u : (lda - beat * 64u);
++      uint32_t src_b, dst_b;
++      uint8_t blk[64];
++      if (mode) {
++        src_b = a + row * ldb + beat * 16u;
++        for (int i = 0; i < 16; i++) {
++          uint32_t v = r->tmem[(src_b + (uint32_t)i) & (TPU_TMEM_WORDS - 1)];
++          blk[i * 4 + 0] = (uint8_t)(v);
++          blk[i * 4 + 1] = (uint8_t)(v >> 8);
++          blk[i * 4 + 2] = (uint8_t)(v >> 16);
++          blk[i * 4 + 3] = (uint8_t)(v >> 24);
++        }
++      } else {
++        src_b = a + row * ldb + beat * 64u;
++        mem_rd(r, src_b, blk, 64);
++      }
++      dst_b = c + row * ldc + beat * 64u;
++      uint64_t strb = (nbytes >= 64u) ? ~0ull : ((1ull << nbytes) - 1ull);
++      mem_wr(r, dst_b, blk, 64, strb);
++      dma += nbytes;
++    }
++  }
++  *dma_out = dma;
++}
++
++static void exec_quant(tpu_ref_t *r, const uint32_t *w, uint64_t *dma_out) {
++  uint32_t m = w[1];
++  uint32_t a = w[4], b = w[5], c = w[6];
++  uint32_t lda = w[7];
++  for (uint32_t row = 0; row < m; row++) {
++    uint32_t base_w = a + row * (lda >> 2);
++    uint32_t sbase_w = b + row * 2u;
++    uint8_t data[64];
++    for (int i = 0; i < 16; i++) {
++      uint32_t v = r->tmem[(base_w + (uint32_t)i) & (TPU_TMEM_WORDS - 1)];
++      data[i * 4 + 0] = (uint8_t)(v);
++      data[i * 4 + 1] = (uint8_t)(v >> 8);
++      data[i * 4 + 2] = (uint8_t)(v >> 16);
++      data[i * 4 + 3] = (uint8_t)(v >> 24);
++    }
++    uint8_t rec[8];
++    for (int i = 0; i < 2; i++) {
++      uint32_t v = r->tmem[(sbase_w + (uint32_t)i) & (TPU_TMEM_WORDS - 1)];
++      rec[i * 4 + 0] = (uint8_t)(v);
++      rec[i * 4 + 1] = (uint8_t)(v >> 8);
++      rec[i * 4 + 2] = (uint8_t)(v >> 16);
++      rec[i * 4 + 3] = (uint8_t)(v >> 24);
++    }
++    uint32_t idx = (c + row) & (TPU_ACT_NBLK - 1);
++    for (uint32_t off = 0; off < 8; off++) {
++      uint64_t dw;
++      memcpy(&dw, data + off * 8u, 8);
++      tpu_ref_act_write(r, idx, off, dw);
++    }
++    uint64_t rw;
++    memcpy(&rw, rec, 8);
++    tpu_ref_act_write(r, idx, 8, rw);
++  }
++  *dma_out = (uint64_t)m * 72u;
++}
++
++// ---------------------------------------------------------------- 门铃
++int tpu_ref_doorbell(tpu_ref_t *r) {
++  if (r->state == TPU_S_ERR) return 0;   // 需要先清错误或软复位
++  if (r->dq_head == r->dq_tail) return 0;
++
++  int guard = 0;
++  for (;;) {
++    if (++guard > 100000) {
++      r->state = TPU_S_ERR;
++      r->err_code = TPU_E_TIMEOUT;
++      break;
++    }
++    uint32_t w[16];
++    r->cur_addr = r->dq_head;
++    mem_rd(r, r->cur_addr, w, 64);
++
++    int e = check_desc(w, r->cur_addr);
++    if (e != TPU_E_NONE) {
++      r->err_code = (uint8_t)e;
++      r->state = TPU_S_ERR;
++      break;
++    }
++
++    uint32_t op = w[0] & 0xFFu;
++    uint32_t prec = (w[0] >> 20) & 3u;
++    int mac = 0;
++    uint64_t dma = 0;
++
++    if (op == TPU_OP_GEMM) {
++      exec_gemm(r, w, &mac, &dma);
++      if (r->state == TPU_S_ERR) break;   // ACC_OVF
++      r->tmem_dirty = 1;
++    } else if (op == TPU_OP_COPY) {
++      exec_copy(r, w, &dma);
++      if (((w[0] >> 16) & 1u)) r->tmem_dirty = 0;
++    } else if (op == TPU_OP_QUANT) {
++      exec_quant(r, w, &dma);
++    }
++
++    // 退休（DRAIN 语义）
++    if (op != TPU_OP_NOP) {
++      r->icount++;
++      r->mac += (uint64_t)mac;
++      r->dma += dma;
++      if (op == TPU_OP_GEMM) {
++        if (prec == 0) r->ret_i8++;
++        else if (prec == 1) r->ret_i4++;
++        else r->ret_tn++;
++      } else {
++        r->ret_tn++;   // BAR/COPY/QUANT/END：RTL ev_prec=2'b11
++      }
++    }
++    if (r->nretire < RETIRE_MAX) r->retire[r->nretire++] = r->cur_addr;
++
++    uint32_t cur = r->cur_addr;
++    uint32_t next = w[11];
++    r->dq_tail = cur;
++    if (next == 0 || op == TPU_OP_END) {
++      r->dq_head = cur;
++      r->state = TPU_S_HALT;
++      break;
++    }
++    r->dq_head = next;
++  }
++  return r->nretire;
++}

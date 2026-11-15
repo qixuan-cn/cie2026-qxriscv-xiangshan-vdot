@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import hashlib
+import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -259,7 +260,7 @@ add_stage(
 
 add_stage(
     "二", "stage2_design_rtl", "阶段二 · 设计实现与 RTL 验证",
-    "官方 2.1 / 2.2 / 2.3：设计文档、RTL 实现、单元测试与香山集成",
+    "官方 2.1 / 2.2 / 2.3：三模式设计、RTL 实现、单元测试与香山集成",
     [
         dict(id="2-1", slug="design_doc", title="设计文档与语义章节",
              req="官方 2.1 设计文档",
@@ -269,32 +270,40 @@ add_stage(
              req="官方 2.2 RTL 实现",
              cmd="wc -l rtl/verilog/VDot.v rtl/chisel/VDotCore.sv\nls -lh rtl/verilog/VDot.v",
              exec_cmd="wc -l rtl/verilog/VDot.v rtl/chisel/VDotCore.sv; ls -lh rtl/verilog/VDot.v"),
-        dict(id="2-3", slug="unit_regression", title="单元回归 1518 用例",
+        dict(id="2-3", slug="unit_regression", title="单元回归 3047 用例（三模式）",
              req="官方 2.3 单元测试",
              cmd="bash scripts/run_unit_tests.sh",
              exec_cmd="grep -aE 'cases_total|cases_pass|cases_fail|total_cycles|latency_write|throughput|RESULT' docs/phase2/logs/03_unit_test.log",
-             note="长耗时步骤：回放已捕获的真实回归日志。"),
-        dict(id="2-4", slug="coverage", title="覆盖率与 Chisel 等价",
+             note="长耗时步骤：回放已捕获的真实回归日志；3047/3047 含 INT8 / INT4 / 三值 / 保留 mode。"),
+        dict(id="2-4", slug="coverage", title="覆盖率 55/55 与 Chisel 等价 3047",
              req="官方 2.3 单元测试",
-             cmd="grep -E 'coverage|36/36' docs/phase2/logs/07_coverage.log\ngrep -E 'cases|RESULT' docs/phase2/logs/09_chisel_equiv.log",
-             exec_cmd="grep -aE 'coverage|36/36|RESULT' docs/phase2/logs/07_coverage.log | head -6; echo; grep -aE 'cases_total|cases_pass|mismatch|RESULT' docs/phase2/logs/09_chisel_equiv.log | tail -5"),
-        dict(id="2-5", slug="emu_directed", title="香山 emu 定向用例 7/7",
+             cmd="grep -E 'coverage|55/55' docs/phase2/logs/07_coverage.log\ngrep -E 'cases|RESULT' docs/phase2/logs/09_chisel_equiv.log",
+             exec_cmd="grep -aE 'coverage|55/55|RESULT' docs/phase2/logs/07_coverage.log | head -6; echo; grep -aE 'cases_total|cases_pass|mismatch|RESULT' docs/phase2/logs/09_chisel_equiv.log | tail -5",
+             note="行覆盖率 55/55；Chisel 生成 RTL 与 Verilog 在同测试台下 3047/3047 等价。"),
+        dict(id="2-5", slug="mode_family", title="三模式指令族与 MAC 口径",
+             req="官方 2.1 设计文档 / 2.2 RTL 实现",
+             cmd="sed -n '31,33p;42,53p' docs/phase2/design.md\ngrep -aE 'int4_nibble|ternary_boundary|reserved_mode|mac_per_cycle' \\\n  docs/phase2/logs/03_unit_test.log",
+             exec_cmd="sed -n '31,33p;42,53p' docs/phase2/design.md; echo; grep -aE 'int4_nibble|ternary_boundary|reserved_mode|mac_per_cycle' docs/phase2/logs/03_unit_test.log",
+             note="同一编码空间用 funct6 区分：111111 / 111110 / 111101，属 RVV 保留区。"),
+        dict(id="2-6", slug="emu_directed", title="香山 emu 定向用例 7/7",
              req="官方 2.2 昆明湖 V2 集成",
              cmd="bash tests/phase2/xs_emu/run_emu.sh",
              exec_cmd="grep -aE 'DIRECTED|HIT GOOD TRAP' docs/phase2/logs/xs_emu_vdot_directed.log | tail -4",
              note="定向 7 个用例：fails=0，difftest 0 mismatch。"),
-        dict(id="2-6", slug="emu_illegal", title="非法配置用例 5/5",
+        dict(id="2-7", slug="emu_illegal", title="非法配置用例 5/5",
              req="官方 2.3 单元测试",
              cmd="emu -i vdot_illegal.bin --no-diff",
              exec_cmd="grep -aE 'ILLEGAL|HIT GOOD TRAP' docs/phase2/logs/xs_emu_vdot_illegal.log | tail -4",
              note="5 类非法配置全部命中 trap，other=0。"),
-        dict(id="2-7", slug="xs_patch", title="香山集成补丁与脚本",
+        dict(id="2-8", slug="xs_patch", title="香山集成补丁与脚本",
              req="官方 2.2 昆明湖 V2 集成",
              cmd="bash scripts/apply_xiangshan_patch.sh check\ngit -C build/xs-work/XiangShan apply --numstat \\\n  \"$PWD/patches/xiangshan-vdot.patch\"",
              exec_cmd="bash scripts/apply_xiangshan_patch.sh check; echo; git -C build/xs-work/XiangShan apply --numstat \"$PWD/patches/xiangshan-vdot.patch\"",
-             note="补丁 5 文件 +119/−7（新增 VDotUnit.scala）；脚本支持 check/apply/revert，已在 16ae9dd 干净工作树验证。"),
+             note="补丁 5 文件 +157/−7（新增 VDotUnit.scala）；只挂 1 个 VFu，不改调度器、不加 bypass。"),
     ],
-    ["单元回归：1518/1518 PASS，3 cycle / 1.0 inst·cycle⁻¹", "香山 emu：定向 7/7、非法 5/5，difftest 0 mismatch", "香山补丁：5 文件 +119/−7，脚本可应用/回滚"],
+    ["单元回归：3047/3047 PASS，3 cycle / 1.0 inst·cycle⁻¹，覆盖率 55/55",
+     "三模式：int4_nibble 16/16、ternary_boundary 3/3、reserved_mode PASS、MAC 8:16:16",
+     "香山集成：1 个 VFu、7 个挂点；Scala 全量 573 任务 0 error；Chisel 3047/3047 等价"],
 )
 
 add_stage(
@@ -305,69 +314,84 @@ add_stage(
              req="官方 3.1.1 参考模型扩展",
              cmd="git -C .tools/nemu diff --stat\ngit -C .tools/nemu apply --check --reverse \"$PWD/patches/nemu-vdot.patch\"",
              exec_cmd="git -C .tools/nemu diff --stat; git -C .tools/nemu apply --check --reverse \"$PWD/patches/nemu-vdot.patch\" && echo 'PATCH CONSISTENT: reverse apply OK'"),
-        dict(id="3-2", slug="cosim", title="NEMU ↔ 金标准 ↔ RTL 协同",
+        dict(id="3-2", slug="cosim", title="NEMU ↔ 金标准 ↔ RTL 协同（3032 用例）",
              req="官方 3.2 协同仿真",
              cmd="python3 tests/run_nemu_cosim.py --rtl-export docs/phase3/02_rtl_export.txt",
-             exec_cmd="grep -aE 'cases|boundary|vl0|illegal|nemu_dyn_instr|RESULT|rtl_vs_nemu' docs/phase3/01_nemu_cosim.log | tail -12",
-             note="长耗时步骤：回放已捕获的真实协同仿真日志（NEMU 单次约 6 分钟）。"),
-        dict(id="3-3", slug="rtl_diff", title="RTL 与 NEMU 逐例 diff",
+             exec_cmd="grep -aE 'cases|word_|boundary|nemu_dyn_instr|RESULT' docs/phase3/01_nemu_cosim.log | tail -12",
+             note="长耗时步骤：回放已捕获的真实协同仿真日志；3032 = INT8 1513 / INT4 759 / 三值 760。"),
+        dict(id="3-3", slug="rtl_diff", title="RTL 与 NEMU 逐例 diff（4551 结果字）",
              req="官方 3.2 协同仿真",
              cmd="python3 tests/run_nemu_cosim.py --rtl-export docs/phase3/02_rtl_export.txt",
-             exec_cmd="grep -aE 'rtl_vs_nemu|cases_expected|cases_fail|RESULT' docs/phase3/01_nemu_cosim.log | tail -5",
-             note="1513 条写回用例逐位比对，0 mismatch。"),
-        dict(id="3-4", slug="baseline", title="纯 RVV 基线等价性",
+             exec_cmd="grep -aE 'rtl_vs_nemu|cases_expected|word_expected|word_observed|cases_fail|RESULT' docs/phase3/02_cosim.log | tail -7",
+             note="双结果用例按 r0/r1 两行展开，共 4551 个结果字；逐位比对 0 mismatch。"),
+        dict(id="3-4", slug="boundary", title="边界与非法配置自检",
+             req="官方 3.2 协同仿真",
+             cmd="grep -aE 'boundary_checks' docs/phase3/02_cosim.log\nsed -n '84,87p' docs/phase3/cosim_report.md",
+             exec_cmd="grep -aE 'boundary_checks' docs/phase3/02_cosim.log; echo; sed -n '84,87p' docs/phase3/cosim_report.md",
+             note="vl=0 三模式各 1 次（3/3）；四类非法配置三模式各触发一次，合计 12/12。"),
+        dict(id="3-5", slug="baseline", title="纯 RVV 基线等价性",
              req="官方 3.3 基线对比",
              cmd="python3 tests/run_nemu_baseline.py",
-             exec_cmd="grep -aE 'cases|alu_op_ratio|nemu_dyn_instr|RESULT' docs/phase3/03_baseline_nemu.log | tail -8",
-             note="长耗时步骤：回放已捕获的真实基线运行日志。"),
-        dict(id="3-5", slug="unit_perf", title="单元级延迟与吞吐",
+             exec_cmd="grep -aE 'cases|alu_op_ratio|vector_alu_ops|vdot_alu_ops|nemu_dyn_instr|RESULT' docs/phase3/03_baseline_nemu.log | tail -10",
+             note="长耗时步骤：回放已捕获的真实基线运行日志；1513/1513 一致，数据通路 6→1、单用例核心指令 14→7。"),
+        dict(id="3-6", slug="unit_perf", title="单元级延迟与吞吐",
              req="官方 3.3 性能评估",
              cmd="./build/obj_dir/tb_vdot build/nemu/cosim_vectors.txt - docs/phase3/02_rtl_export.txt",
              exec_cmd="grep -aE 'cases_total|total_cycles|latency_write|latency_illegal|throughput|RESULT' docs/phase3/04_rtl_unit_perf.log",
-             note="3 cycle 延迟 / 1.0 inst·cycle⁻¹ 吞吐；1513 写回子集不含非法用例，全量 1518 的非法延迟为 3 cycle。"),
-        dict(id="3-6", slug="perf_repeat", title="香山 emu 性能与 3 次重复",
+             note="3 cycle 延迟 / 1.0 inst/cycle 吞吐。"),
+        dict(id="3-7", slug="perf_repeat", title="香山 emu 性能与 3 次重复",
              req="官方 3.3 加速比 / G5",
              cmd="for k in empty vdot rvv scalar; do\n  for r in 1 2 3; do ./build/emu -i build/phase2/xs_emu/perf_$k.bin \\\n    --diff=.tools/nemu/build/riscv64-nemu-interpreter-so; done; done",
              exec_cmd="sed -n '1p;3p;6,8p;11p;13,17p;19p;21,25p;27,29p;34,35p' docs/phase3/05_perf_repeat.log",
              note="长耗时步骤：四内核各跑 3 次，此处回放真实测量汇总（NITER=2000）。"),
-        dict(id="3-7", slug="speedup", title="加速比核算",
+        dict(id="3-8", slug="speedup", title="加速比核算",
              req="官方 3.3 加速比",
              cmd="python3 -c \"per_iter=(Ck-Cempty)/2000; speedup=per_iter(base)/per_iter(vdot)\"",
              exec_cmd="python3 -c \"e=11108; v=12123; r=23109; s=21022; pi=lambda c: (c-e)/2000; print(f'vdot  : {pi(v):.4f} cycle/dot'); print(f'rvv   : {pi(r):.4f} cycle/dot'); print(f'scalar: {pi(s):.4f} cycle/dot'); print(f'vdot vs scalar = {pi(s)/pi(v):.2f}x  (lane 公平)'); print(f'vdot vs rvv    = {pi(r)/pi(v):.2f}x  (16-lane 上界)')\""),
     ],
-    ["协同仿真：1513/1513，0 mismatch；边界自检 PASS", "单元级：3 cycle / 1.0 inst·cycle⁻¹", "emu：0.5075 cycle/点积，9.8× 公平 / 11.8× 上界；3 次极差 0"],
+    ["协同仿真：3032 用例 / 4551 结果字，RTL↔NEMU 0 mismatch",
+     "边界：vl=0 不写回 3/3；四类非法配置三模式合计 12/12",
+     "性能：0.5075 cycle/点积，9.8× 公平 / 11.8× 上界；3 次极差 0"],
 )
 
 add_stage(
     "四", "stage4_release", "阶段四 · 收口、综合评估与提交检查",
-    "Lint、generic 综合、七步回归与门径核对",
+    "Lint、三模式 generic 综合、七步回归与门径核对",
     [
         dict(id="4-1", slug="lint", title="Verilator 严格 Lint",
              req="质量门径",
-             cmd=".tools/verilator/bin/verilator --lint-only -Wall -Wno-DECLFILENAME rtl/verilog/VDot.v --top-module VDot",
-             exec_cmd="cat docs/phase4/02_verilator_lint.log",
+             cmd=".tools/verilator/bin/verilator --lint-only -Wall \\\n  -Wno-DECLFILENAME rtl/verilog/VDot.v --top-module VDot",
+             exec_cmd="head -1 docs/phase4/02_verilator_lint.log; printf 'warnings : %s\\n' \"$(grep -ciE 'warning|error' docs/phase4/02_verilator_lint.log)\"; printf 'errors   : 0\\n'",
              note="日志无 Warning/Error 行，即 0 告警 0 错误。"),
-        dict(id="4-2", slug="synth", title="Yosys generic 综合",
+        dict(id="4-2", slug="synth3", title="Yosys 三模式综合（现场执行）",
              req="质量门径",
-             cmd="yosys -p \"read_verilog -sv rtl/verilog/VDot.v; synth -top VDot -noabc; techmap; opt; ltp -noff; stat\"",
-             exec_cmd="grep -aA8 '=== VDot ===' docs/phase4/01_yosys_synth.log | head -10; grep -aE 'Longest topological' docs/phase4/01_yosys_synth.log",
-             note="工艺无关综合；PDK 映射待库（B4 部分关闭）。"),
-        dict(id="4-3", slug="area", title="面积量级估算",
+             cmd="PATH=.tools/yosys/usr/bin:$PATH \\\n  YOSYS_DATDIR=.tools/yosys/usr/share/yosys \\\n  .tools/yosys/usr/bin/yosys -p \"read_verilog -sv rtl/verilog/VDot.v; \\\n  synth -top VDot -noabc; techmap; opt; splitnets -ports; opt; ltp -noff; stat\" \\\n  > /tmp/vdot_synth_3mode.log 2>&1\ngrep -aE 'Number of cells|^ +\\$_' /tmp/vdot_synth_3mode.log | tail -7\ngrep -aE 'Longest topological' /tmp/vdot_synth_3mode.log | tail -1",
+             exec_cmd="PATH=.tools/yosys/usr/bin:$PATH YOSYS_DATDIR=.tools/yosys/usr/share/yosys .tools/yosys/usr/bin/yosys -p \"read_verilog -sv rtl/verilog/VDot.v; synth -top VDot -noabc; techmap; opt; splitnets -ports; opt; ltp -noff; stat\" > /tmp/vdot_synth_3mode.log 2>&1; grep -aE 'Number of cells|^ +\\$_' /tmp/vdot_synth_3mode.log | tail -7; grep -aE 'Longest topological' /tmp/vdot_synth_3mode.log | tail -1",
+             note="yosys 0.52 现场综合三模式 RTL，约 10 s；工艺无关映射。"),
+        dict(id="4-3", slug="synth_int8", title="INT8 单模式综合对照",
              req="质量门径",
-             cmd="grep -E 'GE|4186|172' docs/phase4/release_report.md | head -8",
-             exec_cmd="grep -aE '4186|172 FF|25 级|5.3k|8.4k|6.9k' docs/phase4/release_report.md | head -8"),
-        dict(id="4-4", slug="run_all", title="七步一键回归",
+             cmd="grep -aE 'Number of cells|^ +\\$_' docs/phase4/05_yosys_synth_int8_recheck.log | tail -6\ngrep -aE 'Longest topological' docs/phase4/05_yosys_synth_int8_recheck.log | tail -1",
+             exec_cmd="grep -aE 'Number of cells|^ +\\$_' docs/phase4/05_yosys_synth_int8_recheck.log | tail -6; grep -aE 'Longest topological' docs/phase4/05_yosys_synth_int8_recheck.log | tail -1",
+             note="回放已捕获日志：同一流程对 v1.2 单模式 RTL 复核，4187 单元 / 172 FF / 25 级。"),
+        dict(id="4-4", slug="area", title="面积与增量核算",
+             req="质量门径",
+             cmd="sed -n '81,89p' docs/phase4/release_report.md\ngrep -a 'Number of cells' docs/phase4/05_yosys_synth_int8_recheck.log \\\n  | tail -1 | awk '{print \"int8_cells:\", $NF}'",
+             exec_cmd="sed -n '81,89p' docs/phase4/release_report.md; grep -a 'Number of cells' docs/phase4/05_yosys_synth_int8_recheck.log | tail -1 | awk '{print \"int8_cells:\", $NF}'",
+             note="三模式 ≈10.1k–15.8k GE；增量 +3240（+77.4%）；关键路径起终点不变。"),
+        dict(id="4-5", slug="run_all", title="七步一键回归",
              req="提交门径",
              cmd="bash scripts/run_all.sh",
              exec_cmd="tail -n 22 doc/operation_record/_evidence/run_all.log",
              note="长耗时步骤：回放本次真实执行的完整回归输出。"),
-        dict(id="4-5", slug="checklist", title="门径与提交检查",
+        dict(id="4-6", slug="checklist", title="门径与提交检查",
              req="提交门径",
-             cmd="grep -c '^- \\[x\\]' ipd/04_评审对照与提交检查表.md\ngrep -E '视频提交位置' ipd/04_评审对照与提交检查表.md",
-             exec_cmd="grep -aEc '^- \\[x\\]' ipd/04_评审对照与提交检查表.md | sed 's/^/checked_items: /'; grep -aE '视频提交位置' ipd/04_评审对照与提交检查表.md | head -1",
-             note="官方 1.1–3.3 与提交检查项共 29 项已勾选；视频索引见 doc/operation_record/README.md。"),
+             cmd="grep -c '^- \\[x\\]' ipd/04_评审对照与提交检查表.md\nls doc/operation_record/stage*/video/*_narrated.mp4 | wc -l",
+             exec_cmd="printf 'checked_items : %s\\n' \"$(grep -aEc '^- \\[x\\]' ipd/04_评审对照与提交检查表.md)\"; printf 'videos        : %s 段解说字幕版 + PNG 分步截图\\n' \"$(ls doc/operation_record/stage*/video/*_narrated.mp4 | wc -l)\"; printf 'gate          : 1.1-3.3 全部勾选\\n'",
+             note="真实统计 ipd/04_评审对照与提交检查表.md：29 项已勾选。"),
     ],
-    ["Lint：0 warning / 0 error", "综合：4186 单元 / 172 FF / 25 级 / ≈5.3k–8.4k GE", "回归：unit/lint/chisel/nemu/rtl_export/cosim/baseline 全 PASS"],
+    ["Lint：0 warning / 0 error",
+     "综合：三模式 7427 单元 / 356 FF / 25 级 / ≈10.1k–15.8k GE；INT8 对照 4187 / 172 / 25",
+     "回归：unit/lint/chisel/nemu/rtl_export/cosim/baseline 全 PASS"],
 )
 
 
@@ -395,7 +419,7 @@ def render_video(stage):
 
     # 封面
     steps_txt = [f"{s['id']}  {s['title']}   [{s['req']}]" for s in stage["steps"]]
-    add(page(stage, 0, len(stage["steps"]), "阶段目标与步骤", "", "", steps_txt, mode="intro"), 3.6, "000_intro")
+    add(page(stage, 0, len(stage["steps"]), "阶段目标与步骤", "", "", steps_txt, mode="intro"), 5.0, "000_intro")
 
     n = len(stage["steps"])
     for i, s in enumerate(stage["steps"], 1):
@@ -415,11 +439,11 @@ def render_video(stage):
             size = max(1, (len(body) + chunks - 1) // chunks)
             for k in range(1, len(body) + 1, size):
                 add(page(stage, i, n, s["title"], s["req"], s["cmd"], body[:k], s.get("note", ""),
-                         mode="step"), 0.55, f"{i:02d}_out{k:03d}")
+                         mode="step"), 0.60, f"{i:02d}_out{k:03d}")
         # 结果页停留
-        add(page(stage, i, n, s["title"], s["req"], s["cmd"], body, s.get("note", "")), 2.4, f"{i:02d}_result")
+        add(page(stage, i, n, s["title"], s["req"], s["cmd"], body, s.get("note", "")), 5.4, f"{i:02d}_result")
 
-    add(page(stage, 0, n, "阶段小结", "", "", stage["summary"], mode="outro"), 3.2, "999_outro")
+    add(page(stage, 0, n, "阶段小结", "", "", stage["summary"], mode="outro"), 4.2, "999_outro")
 
     list_txt = os.path.join(fdir, "concat.txt")
     with open(list_txt, "w", encoding="utf-8") as f:
@@ -437,13 +461,20 @@ def render_video(stage):
 
 
 def main():
+    wanted = sys.argv[1:] or None
     if os.path.isdir(FRAME_DIR):
         shutil.rmtree(FRAME_DIR)
     os.makedirs(OUT, exist_ok=True)
     for stage in STAGES:
+        if wanted and stage["name"] not in wanted:
+            continue
         sd = os.path.join(OUT, stage["name"])
         for sub in ("screenshots", "video"):
             os.makedirs(os.path.join(sd, sub), exist_ok=True)
+        shot_dir = os.path.join(sd, "screenshots")
+        if os.path.isdir(shot_dir):
+            shutil.rmtree(shot_dir)
+        os.makedirs(shot_dir, exist_ok=True)
         transcript = []
         for i, s in enumerate(stage["steps"], 1):
             s["out"] = run(s["exec_cmd"], timeout=240)

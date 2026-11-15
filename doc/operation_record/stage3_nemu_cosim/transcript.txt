@@ -3,29 +3,42 @@
 
 $ git -C .tools/nemu diff --stat
 git -C .tools/nemu apply --check --reverse "$PWD/patches/nemu-vdot.patch"
- src/isa/riscv64/include/isa-all-instr.h |  1 +
- src/isa/riscv64/instr/rvv/decode.h      |  4 ++++
- src/isa/riscv64/instr/rvv/vcompute.h    | 37 +++++++++++++++++++++++++++++++++
- 3 files changed, 42 insertions(+)
+ src/isa/riscv64/include/isa-all-instr.h |   1 +
+ src/isa/riscv64/instr/rvv/decode.h      |  10 +++
+ src/isa/riscv64/instr/rvv/vcompute.h    | 126 ++++++++++++++++++++++++++++++++
+ 3 files changed, 137 insertions(+)
 PATCH CONSISTENT: reverse apply OK
 
 $ python3 tests/run_nemu_cosim.py --rtl-export docs/phase3/02_rtl_export.txt
-cases_expected   : 1513
-cases_observed   : 1513
+cases_expected   : 3032 int8=1513 int4x2=759 vtdot=760
+word_expected    : 4551
+word_observed    : 4551
 cases_fail       : 0
 cases_extra      : 0
-nemu_dyn_instr   : 78,701
-boundary_checks  : vl0=PASS(vd=11223344) illegal=PASS(traps=00000004, expect=4)
-rtl_vs_nemu      : lines=1513/nemu=1513 mismatch=0
+nemu_dyn_instr   : 72,224
+boundary_checks  : int8=PASS(vd=11223344/55667788, traps=00000004); int4x2=PASS(vd=11223344/55667788, traps=00000004); vtdot=PASS(vd=11223344/55667788, traps=00000004)
 RESULT           : PASS
 
 $ python3 tests/run_nemu_cosim.py --rtl-export docs/phase3/02_rtl_export.txt
-cases_expected   : 1513
+cases_expected   : 3032 int8=1513 int4x2=759 vtdot=760
+word_expected    : 4551
+word_observed    : 4551
 cases_fail       : 0
-rtl_vs_nemu      : lines=1513/nemu=1513 mismatch=0
+rtl_vs_nemu      : lines=4551/nemu=4551 mismatch=0
 RESULT           : PASS
 
+$ grep -aE 'boundary_checks' docs/phase3/02_cosim.log
+sed -n '84,87p' docs/phase3/cosim_report.md
+boundary_checks  : int8=PASS(vd=11223344/55667788, traps=00000004); int4x2=PASS(vd=11223344/55667788, traps=00000004); vtdot=PASS(vd=11223344/55667788, traps=00000004)
+
+| NEMU 退出码 | 0（`nemu_trap` code 0，GOOD TRAP） |
+| 边界：`vl=0` 不写回（`vd` 保持哨兵 `11223344/55667788`） | 3/3 PASS（三模式各 1） |
+| 边界：非法配置触发 `EX_II`（vm=0 / e16 / e64 / m2） | 12/12 PASS（三模式各 4） |
+| **判定** | **PASS** |
+
 $ python3 tests/run_nemu_baseline.py
+  vector_alu_ops : 6 / case
+  vdot_alu_ops   : 1 / case
   alu_op_ratio   : 6.0x
 cases_expected   : 1513
 cases_observed   : 1513

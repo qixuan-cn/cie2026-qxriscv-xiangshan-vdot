@@ -3,47 +3,73 @@
 
 $ grep -nE '^## |^### ' docs/phase2/design.md | head -18
 15:## 1. 设计目标与约束
-28:## 2. 指令语义
-30:### 2.1 汇编格式与建议编码
-48:### 2.2 规范性伪代码
-64:### 2.3 位宽推导（本设计的关键决策）
-76:### 2.4 语义判定表
-93:## 3. 微架构设计
-95:### 3.1 单元定位
-107:### 3.2 数据通路
-135:### 3.3 周期级时序
-146:### 3.4 参数
-157:## 4. RTL 实现说明
-159:### 4.1 模块接口
-179:### 4.2 实现结构（与文件对应）
-199:### 4.3 Chisel 版本
-218:## 5. 与香山昆明湖 V2 的集成方案
-238:## 6. 验证结果摘要
-259:## 7. 偏差、风险与未决项
+37:## 2. 指令语义
+39:### 2.1 汇编格式与编码
+63:### 2.2 规范性伪代码
+97:### 2.3 结果布局与操作数解释
+120:### 2.4 位宽推导（本设计的关键决策）
+132:### 2.5 语义判定表
+150:## 3. BitNet b1.58 与 vdot 的融合设计
+152:### 3.1 为什么可以融合
+162:### 3.2 三值权重的 2-bit 编码与存储收益
+174:### 3.3 无乘法器的 EX1
+188:### 3.4 与 INT4 共享归约树
+211:### 3.5 数值边界与适用性
+221:### 3.6 与竞品方案的差异
+231:### 3.7 BitNet b1.58 的量化前端与本指令的边界
+246:### 3.8 1.58-bit 打包密度的取舍
+259:### 3.9 融合评审结论
+279:## 4. 微架构设计
 
 $ wc -l rtl/verilog/VDot.v rtl/chisel/VDotCore.sv
 ls -lh rtl/verilog/VDot.v
-  175 rtl/verilog/VDot.v
-  214 rtl/chisel/VDotCore.sv
-  389 total
--rw-r--r-- 1 dbqxxs dbqxxs 6.6K Nov  2 20:21 rtl/verilog/VDot.v
+  345 rtl/verilog/VDot.v
+  475 rtl/chisel/VDotCore.sv
+  820 total
+-rw-r--r-- 1 dbqxxs dbqxxs 14K Nov  9 00:07 rtl/verilog/VDot.v
 
 $ bash scripts/run_unit_tests.sh
-cases_total      : 1518
-cases_pass       : 1518
+cases_total      : 3047
+cases_pass       : 3047
 cases_fail       : 0
 latency_write    : 3 cycle
 throughput       : 1 inst/cycle
-total_cycles     : 10220
+throughput_int4x2: 1 inst/cycle
+throughput_vtdot : 1 inst/cycle
+total_cycles     : 21588
 RESULT           : PASS
 
-$ grep -E 'coverage|36/36' docs/phase2/logs/07_coverage.log
+$ grep -E 'coverage|55/55' docs/phase2/logs/07_coverage.log
 grep -E 'cases|RESULT' docs/phase2/logs/09_chisel_equiv.log
-Total coverage (36/36) 100.00%
+Total coverage (55/55) 100.00%
 
-cases_total      : 1518
-cases_pass       : 1518
+cases_total      : 3047
+cases_pass       : 3047
 RESULT           : PASS
+
+$ sed -n '31,33p;42,53p' docs/phase2/design.md
+grep -aE 'int4_nibble|ternary_boundary|reserved_mode|mac_per_cycle' \
+  docs/phase2/logs/03_unit_test.log
+| `vdot.vv` | INT8 × INT8，8 lane | 8 | 1 个 32-bit |
+| `vdot4x2.vv` | INT4 × INT4，16 nibble | 16 | 2 个 32-bit |
+| `vtdot.vv` | BitNet 三值权重 × INT8 激活，16 lane | 16（无乘法器） | 2 个 32-bit |
+vdot.vv     vd, vs1, vs2      # INT8 点积
+vdot4x2.vv  vd, vs1, vs2      # INT4 打包，双结果
+vtdot.vv    vd, vs1, vs2      # BitNet b1.58 三值权重，双结果
+```
+
+三条指令统一使用 `opcode=0x57`（OP-V）、`funct3=000`（OPIVV）、`vm=1`，用 `funct6` 区分：
+
+| 字段 | 位域 | `vdot.vv` | `vdot4x2.vv` | `vtdot.vv` | 说明 |
+|---|---|---|---|---|---|
+| funct6 | [31:26] | `111111` | `111110` | `111101` | RVV 保留空间，与 RVV 1.0 已分配项无冲突 |
+| vm | [25] | `1` | `1` | `1` | 仅无掩码形态合法 |
+| vs2 | [24:20] | 源 2 | 源 2 | 三值权重码 | 提供 lane / nibble / 2-bit 码 |
+
+int4_nibble      : 16/16 PASS
+ternary_boundary : 3/3 PASS
+reserved_mode    : PASS
+mac_per_cycle    : int8=8 int4x2=16 vtdot=16
 
 $ bash tests/phase2/xs_emu/run_emu.sh
 DIRECTED fails=00000000
@@ -59,7 +85,7 @@ git -C build/xs-work/XiangShan apply --numstat \
 已应用（可 revert）
 
 1	1	src/main/scala/xiangshan/Parameters.scala
-8	0	src/main/scala/xiangshan/backend/decode/VecDecoder.scala
+13	0	src/main/scala/xiangshan/backend/decode/VecDecoder.scala
 25	4	src/main/scala/xiangshan/backend/fu/FuConfig.scala
 7	2	src/main/scala/xiangshan/backend/fu/FuType.scala
-78	0	src/main/scala/xiangshan/backend/fu/wrapper/VDotUnit.scala
+111	0	src/main/scala/xiangshan/backend/fu/wrapper/VDotUnit.scala

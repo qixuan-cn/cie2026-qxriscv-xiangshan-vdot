@@ -11,6 +11,22 @@
 
 本设计走**双结果双累加流**（一条指令产出两个独立 8-lane 部分和）与 **BitNet b1.58 三值融合**（16 MAC/指令、零乘法器、权重相对 INT8 4× 压缩），且不修改既有 VFu 与调度器。
 
+### RiscvTpu：把创新从"指令"推到"系统"（规划）
+
+一句话：**openTPU 用私有宏指令做 TPU，我们用 RISC-V 做 TPU** —— 同一套 RISC-V 指令流从标量核贯到 tile 引擎，不加 opcode、不换工具链。规格基线见 [RiscvTpu/](RiscvTpu/README.md)。
+
+| 层次 | 创新点 | 现状 | 对照 |
+|---|---|---|---|
+| **指令级** | 双结果双累加流 + 三值融合；INT4 单位 MAC 面积仅为 INT8 的 1/4 | 已实测 | 对标量 9.8×、对 RVV 11.8× |
+| **架构级** | **三层计算塔**：标量核（控制/采样）→ RVV + `vdot` 三指令（GEMV/epilogue/量化）→ MXU tile 引擎（GEMM）；控制面是 64 B 描述符 + CSR，**除已有三条 `vdot` 外 opcode 零新增** | 规格期 | openTPU 需 16 条私有宏指令 + 自研编译器 |
+| **应用级** | **"位宽即速度"的端侧推理**：prefill 计算受限、decode 带宽受限，同一流水按 `prec` 在 int8/int4/三值间切换 | 规划 | 7B 模型 decode 上限 2.4 / 4.9 / 9.8 tok/s（17.07 GB/s） |
+
+三个落地方案：
+
+1. **可对拍性作为设计约束**：tile 级每个结果都必须能用一组 `vdot` 指令逐位复算；scale 行格式与 openTPU 兼容，量化产物可互换，因此"向量路径"与"矩阵路径"永远互为参照，不存在"两套数值各说各话"。
+2. **边缘场景的取舍**：不做图编译器、不做训练，只交付 GEMM / GEMV / QUANT 三件套 + 驱动 + 描述符生成器；把"能被 GCC/LLVM 直接使用"当成硬卖点，而不是像私有 ISA 那样自建软件栈。
+3. **可裁剪的面积-算力曲线**：`D`/`MCOLS`/`WPB` 全参数化，≈53.5k LUT 的 V1 预算可降到 mini 配置；同一份 RTL 覆盖 int8 边缘视觉、int4 端侧 LLM、三值 BitNet 三类负载。
+
 ## 综合结果（先看结论）
 
 Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实跑），同一流程对三模式与 INT8 单模式各跑一遍：
@@ -67,6 +83,36 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 
 > **表述约束**：可以宣称"`vdot` 已在香山昆明湖 V2 的 `emu`（Verilator）+ difftest 环境集成验证，并取得实测加速比 9.8×（lane 公平）/11.8×（16-lane 上界）"。仍不得宣称：PDK 级面积/时序（无工艺库）、真实频率下的绝对性能、FPGA/流片结果；非法配置用例的 difftest 存在参考模型侧已知陷阱滞后，故用程序内自检（见 [测试报告 §8.1](docs/phase2/test_report.md)）。
 
+## RiscvTpu（规划：从"一条指令"走向"一个 TPU"）
+
+`vdot` 只解决寄存器级的 8/16 路点积；**RiscvTpu** 是它的自然延伸：在同一个 RISC-V/香山体系内补上 tile 级的矩阵算力，设计基线见 [RiscvTpu/](RiscvTpu/README.md)。
+
+**一句话定位**：openTPU 证明了"用私有宏指令做 TPU"能跑通；RiscvTpu 要证明"用 RISC-V 就能做 TPU"。
+
+| 维度 | 设计 |
+|---|---|
+| 结构 | **三层计算塔**：标量核（控制/采样）→ RVV + `vdot` 三指令（GEMV/epilogue/量化）→ MXU tile 引擎（GEMM） |
+| 控制面 | **不新增 opcode**：RV64 + RVV 程序 + 64 B 描述符 + CSR，硬件只多一个 doorbell |
+| 算力 | MXU 8 列 × 64 深 = **512 int8 MAC/cycle**；133.33 MHz → 68.3 GMAC/s；AXI 1024-bit = 17.07 GB/s |
+| 数值 | 内层**精确整数**累加到 48 bit（int8/int4/三值上界分别 2^42 / 2^39 / 2^31，余量 ≥32×），每输出只做一次 fp32 epilogue |
+| 精度 | int8 / int4 / 三值（BitNet b1.58）三精度同一条流水，由描述符 `prec` 切换 |
+| 面积预算 | ≈53.5k LUT / 160 DSP / 60 BRAM36（xc7k480t 的 18% / 5%），待 M2 综合确认 |
+
+**两项已定决策**（M0 冻结前口径）：
+
+1. **量化 scale 行兼容 openTPU 格式**——权重行用其 `WF=0`/`WF=1` 布局，ACT RAM 每 `(行,block)` 8 字节 `Sa + 4×da`，分组粒度 `D/4 = 16`。价值：可直接加载 openTPU `quant.py` 的量化产物做位精确对拍。
+2. **MXU 输出落 TMEM**——`GEMM` 的 `C_addr` 是 TMEM 字地址，回 DRAM 由后续 `COPY` 完成；epilogue 与 TMEM 同域，省一次 AXI 往返。
+
+| 文档 | 内容 |
+|---|---|
+| [可行性分析](RiscvTpu/docs/01_可行性分析.md) | 目标/非目标、位宽上界推导、面积与带宽预算、7 条风险、Go/No-Go |
+| [架构设计规格](RiscvTpu/docs/02_架构设计规格.md) | 三层塔、9 个模块、存储层次与带宽守恒、MXU 微架构、香山集成三方案、6 条 ADR |
+| [功能设计规格](RiscvTpu/docs/03_功能设计规格.md) | CSR 表、64 B 描述符、6 个 op、GEMM 精确伪码、openTPU 兼容 scale 格式、12 类错误码 |
+| [项目开发计划](RiscvTpu/docs/04_项目开发计划.md) | M0–M5 阶段、交付物与退出准则、6 道评审门 |
+| [测试方案与测试用例](RiscvTpu/docs/05_测试方案与测试用例.md) | L0–L4 五级体系、三方对拍、覆盖率模型、71 条用例、回归门禁 |
+
+> **状态**：规格期。**未改动任何 RTL**，`vdot` FU 与香山补丁保持现状；文中除标注"实测"者外，面积/频率/吞吐均为预算或目标值。与 openTPU 的详细对照见 `openTPU-main/docs/vdot-integration/`（该目录被 `.gitignore` 排除，仅本地可读）。
+
 ## 当前环境（2026-11-01）
 
 工作区已迁移到 `/home/dbqxxs/xsriscv/cieriscv`，主机为 Debian 13 / 48 核 / 31 GiB。工具可用性决定哪些证据能复跑：
@@ -100,6 +146,8 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 ├── rtl/
 │   ├── verilog/VDot.v   # 三模式 RTL（INT8 / INT4 双结果 / 三值双结果，已验证）
 │   └── chisel/          # VDot.scala（已编译）+ VDotCore.sv（生成的 SV）+ VDotWrap.v（端口适配壳）
+├── RiscvTpu/            # 后续规划：基于 RISC-V/香山的 tile 级 TPU（规格期，仅文档）
+│   └── docs/            # 可行性分析、架构规格、功能规格、开发计划、测试方案与用例
 ├── patches/
 │   ├── nemu-vdot.patch  # NEMU 三模式扩展补丁（3 文件，170 行）
 │   ├── xiangshan-vdot.patch  # 香山三模式集成补丁（5 文件，+157/−7）
