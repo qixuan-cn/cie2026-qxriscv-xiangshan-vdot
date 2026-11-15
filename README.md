@@ -11,14 +11,14 @@
 
 本设计走**双结果双累加流**（一条指令产出两个独立 8-lane 部分和）与 **BitNet b1.58 三值融合**（16 MAC/指令、零乘法器、权重相对 INT8 4× 压缩），且不修改既有 VFu 与调度器。
 
-### RiscvTpu：把创新从"指令"推到"系统"（规划）
+### RiscvTpu：把创新从"指令"推到"系统"（V1 已实现）
 
 一句话：**openTPU 用私有宏指令做 TPU，我们用 RISC-V 做 TPU** —— 同一套 RISC-V 指令流从标量核贯到 tile 引擎，不加 opcode、不换工具链。规格基线见 [RiscvTpu/](RiscvTpu/README.md)。
 
 | 层次 | 创新点 | 现状 | 对照 |
 |---|---|---|---|
 | **指令级** | 双结果双累加流 + 三值融合；INT4 单位 MAC 面积仅为 INT8 的 1/4 | 已实测 | 对标量 9.8×、对 RVV 11.8× |
-| **架构级** | **三层计算塔**：标量核（控制/采样）→ RVV + `vdot` 三指令（GEMV/epilogue/量化）→ MXU tile 引擎（GEMM）；控制面是 64 B 描述符 + CSR，**除已有三条 `vdot` 外 opcode 零新增** | 规格期 | openTPU 需 16 条私有宏指令 + 自研编译器 |
+| **架构级** | **三层计算塔**：标量核（控制/采样）→ RVV + `vdot` 三指令（GEMV/epilogue/量化）→ MXU tile 引擎（GEMM）；控制面是 64 B 描述符 + CSR，**除已有三条 `vdot` 外 opcode 零新增** | **V1 已实现**：8 个 SV 模块 + 41/41 tile 用例 + 28/28 设备级 difftest | openTPU 需 16 条私有宏指令 + 自研编译器 |
 | **应用级** | **"位宽即速度"的端侧推理**：prefill 计算受限、decode 带宽受限，同一流水按 `prec` 在 int8/int4/三值间切换 | 规划 | 7B 模型 decode 上限 2.4 / 4.9 / 9.8 tok/s（17.07 GB/s） |
 
 三个落地方案：
@@ -54,6 +54,7 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 | 阶段二 | 设计文档、RTL、正/负/边界测试 | **完成（三模式）**：3047/3047 PASS，行覆盖率 55/55 = 100%；Chisel 版生成 RTL，同向量等价回归 3047/3047；香山 emu 内 INT8 定向 7/7、非法 5/5 |
 | 阶段三 | NEMU 扩展、协同仿真、基线对比与加速分析 | **完成（三模式）**：3032 用例 / 4551 结果字 / 0 fail，三模式 boundary 全 PASS；单元级 3 cycle / 1.0 inst/cycle，MAC/cycle = 8:16:16；**香山 emu 实测加速比 9.8×（对标量，8-lane 公平）/ 11.8×（对 RVV 基线，16-lane，属上界）**（INT8，NITER=2000） |
 | 阶段四 | RTL 收口、综合评估、加速模型与提交 | **收口完成**：严格 lint 0 告警；generic 综合**三模式 7427 单元 / 356 FF / 最长路径 25 级**（≈10.1k–15.8k GE；INT8 单模式对照 4187 / 172 / 25），关键路径不变；三模式 Scala 编译 PASS；PDK 签核待实施 |
+| RiscvTpu V1 | tile 级 TPU：8 个 SV 模块、41 条 tile 用例、设备级 difftest | **V1 完成**：`41/41` tile + `495448` 条 fp32 逐位对拍；设备级 difftest `28/28`（`RD_LATENCY=0/2`）；NEMU 设备插件与 T4 性能模型已落地；T3a emu 挂载待执行（见 [RiscvTpu/TODO.md](RiscvTpu/TODO.md)） |
 
 ### 已完成并验证（模块级 RTL 仿真 + NEMU 协同仿真 + 香山 emu 系统级）
 
@@ -83,9 +84,9 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 
 > **表述约束**：可以宣称"`vdot` 已在香山昆明湖 V2 的 `emu`（Verilator）+ difftest 环境集成验证，并取得实测加速比 9.8×（lane 公平）/11.8×（16-lane 上界）"。仍不得宣称：PDK 级面积/时序（无工艺库）、真实频率下的绝对性能、FPGA/流片结果；非法配置用例的 difftest 存在参考模型侧已知陷阱滞后，故用程序内自检（见 [测试报告 §8.1](docs/phase2/test_report.md)）。
 
-## RiscvTpu（规划：从"一条指令"走向"一个 TPU"）
+## RiscvTpu V1：从"一条指令"走向"一个 TPU"（已实现）
 
-`vdot` 只解决寄存器级的 8/16 路点积；**RiscvTpu** 是它的自然延伸：在同一个 RISC-V/香山体系内补上 tile 级的矩阵算力，设计基线见 [RiscvTpu/](RiscvTpu/README.md)。
+`vdot` 只解决寄存器级的 8/16 路点积；**RiscvTpu** 是它的自然延伸：在同一个 RISC-V/香山体系内补上 tile 级的矩阵算力。入口见 [RiscvTpu/README.md](RiscvTpu/README.md)，待办与待决策见 [RiscvTpu/TODO.md](RiscvTpu/TODO.md)。
 
 **一句话定位**：openTPU 证明了"用私有宏指令做 TPU"能跑通；RiscvTpu 要证明"用 RISC-V 就能做 TPU"。
 
@@ -97,6 +98,17 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 | 数值 | 内层**精确整数**累加到 48 bit（int8/int4/三值上界分别 2^42 / 2^39 / 2^31，余量 ≥32×），每输出只做一次 fp32 epilogue |
 | 精度 | int8 / int4 / 三值（BitNet b1.58）三精度同一条流水，由描述符 `prec` 切换 |
 | 面积预算 | ≈53.5k LUT / 160 DSP / 60 BRAM36（xc7k480t 的 18% / 5%），待 M2 综合确认 |
+
+**V1 已实现并验证**（2026-11-15）：
+
+| 项 | 结果 |
+|---|---|
+| RTL | `tpu_pkg/top/mxu/tmem/act/quant/copy/csr` 共 8 个 SV 模块，描述符驱动（GEMM/COPY/QUANT/BAR/NOP/END） |
+| 功能回归 | **41/41** tile 用例；fp32 原语 **495448 checks / 0 failures**；Verilator `-Wall` 零告警 |
+| 设备级 difftest（T2） | DUT=`tpu_top` vs REF=独立的 C 设备模型；**28/28** 描述符流，逐位比对 CSR 白名单 / TMEM 16K 字 / DRAM 1 MiB / 退休地址序列 |
+| 性能模型（T4） | `RD_LATENCY` 可配读延迟 + FETCH/MXU/COPY 等待状态 + 真实 `STALL_MEM`；`RD_LATENCY=2` 下仍 **28/28**，默认 0 时逐周期与基线一致 |
+| 整机接入（T3a） | emu 宿主侧 MMIO 适配层自检 **28/28**；Chisel 设备挂载步骤见 [patches/xiangshan-tpu-device.md](patches/xiangshan-tpu-device.md)，待重建 emu |
+| NEMU 插件 | `patches/nemu-tpu-device.patch`（`CONFIG_TPU_DEV`，7 处改动）；完整链接构建待启用 |
 
 **两项已定决策**（M0 冻结前口径）：
 
@@ -110,8 +122,11 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 | [功能设计规格](RiscvTpu/docs/03_功能设计规格.md) | CSR 表、64 B 描述符、6 个 op、GEMM 精确伪码、openTPU 兼容 scale 格式、12 类错误码 |
 | [项目开发计划](RiscvTpu/docs/04_项目开发计划.md) | M0–M5 阶段、交付物与退出准则、6 道评审门 |
 | [测试方案与测试用例](RiscvTpu/docs/05_测试方案与测试用例.md) | L0–L4 五级体系、三方对拍、覆盖率模型、71 条用例、回归门禁 |
+| [实现说明与验证报告](RiscvTpu/docs/06_实现说明与验证报告.md) | V1 RTL 结构、模块接口、回归结果、与规格的偏差 |
+| [偏差修复计划](RiscvTpu/docs/07_偏差修复计划.md) | D1–D12 偏差项、修复优先级与退出准则 |
+| [验证工具链与 difftest 方案](RiscvTpu/docs/08_验证工具链与difftest方案.md) | T0–T4 四层 difftest、T2 设备级方案、T3/T4 路线图与落地记录 |
 
-> **状态**：规格期。**未改动任何 RTL**，`vdot` FU 与香山补丁保持现状；文中除标注"实测"者外，面积/频率/吞吐均为预算或目标值。与 openTPU 的详细对照见 `openTPU-main/docs/vdot-integration/`（该目录被 `.gitignore` 排除，仅本地可读）。
+> **状态**：RiscvTpu V1 已实现并自测通过；**未改动 `vdot` FU 与香山补丁**，两者保持独立。面积/频率/吞吐除标注"实测"者外仍为预算或目标值。T3b（接 RTL 整机）依赖 07 文 D8/D9 的 AXI 壳，尚未启动。
 
 ## 当前环境（2026-11-01）
 
@@ -146,13 +161,23 @@ Yosys 0.52 工艺无关综合（`synth -noabc; techmap`，2026-11-10 本机实�
 ├── rtl/
 │   ├── verilog/VDot.v   # 三模式 RTL（INT8 / INT4 双结果 / 三值双结果，已验证）
 │   └── chisel/          # VDot.scala（已编译）+ VDotCore.sv（生成的 SV）+ VDotWrap.v（端口适配壳）
-├── RiscvTpu/            # 后续规划：基于 RISC-V/香山的 tile 级 TPU（规格期，仅文档）
-│   └── docs/            # 可行性分析、架构规格、功能规格、开发计划、测试方案与用例
+├── RiscvTpu/            # 已实现：tile 级 TPU（V1 三精度 MXU + 设备级 difftest）
+│   ├── README.md        # 项目入口：快速验证、已定决策、文档索引
+│   ├── TODO.md          # 待办与待决策（每日交接）
+│   ├── docs/            # 01 可行性 … 08 验证工具链与 difftest（8 篇）
+│   ├── rtl/             # 8 个 SV 模块：tpu_top / mxu / tmem / act / quant / copy / csr / pkg
+│   ├── sim/             # 存储模型、仿真顶层、fp32/tile testbench
+│   │   ├── difftest/    #   设备级 difftest：C 参考模型 + DUT 封装 + 主循环
+│   │   └── emu/         #   T3a：emu 宿主侧 MMIO 适配层与自检
+│   ├── tests/           # ref_tpu.py 黄金模型；difftest/gen_desc_stream.py 描述符流
+│   └── scripts/         # lint / regress / difftest / emu_selftest
 ├── patches/
 │   ├── nemu-vdot.patch  # NEMU 三模式扩展补丁（3 文件，170 行）
 │   ├── xiangshan-vdot.patch  # 香山三模式集成补丁（5 文件，+157/−7）
 │   ├── xiangshan-vdot-patch.md  # 补丁说明（改动清单、应用/回滚、验证与边界）
-│   └── xiangshan-vdot-integration.md  # 香山集成规程与核对表（已执行）
+│   ├── xiangshan-vdot-integration.md  # 香山集成规程与核对表（已执行）
+│   ├── nemu-tpu-device.patch  # RiscvTpu：NEMU 设备模型插件（CONFIG_TPU_DEV，7 处改动）
+│   └── xiangshan-tpu-device.md  # RiscvTpu：T3a emu 设备挂载步骤（待执行）
 ├── tests/
 │   ├── ref_vdot.py      # Python golden model（三模式）
 │   ├── ref_baseline.py  # 基线指令序列的语义等价模型
